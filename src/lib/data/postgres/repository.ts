@@ -57,6 +57,7 @@ function toRepositoryError(error: unknown, context: string): RepositoryError {
 const ANNOUNCEMENT_COLUMNS: Record<keyof AnnouncementInput, string> = {
   internalTitle: "internal_title",
   imagePath: "image_path",
+  orientation: "orientation",
   publishAt: "publish_at",
   expiresAt: "expires_at",
   isPublished: "is_published",
@@ -314,9 +315,9 @@ export function createPostgresRepository(actorId: string | null): Repository {
     async createAnnouncement(input, createdBy) {
       const row = await first<AnnouncementRow>(
         "createAnnouncement",
-        `insert into public.announcements (internal_title, image_path, publish_at, expires_at, is_published, created_by)
-         values ($1, $2, $3, $4, $5, $6) returning *`,
-        [input.internalTitle, input.imagePath, input.publishAt, input.expiresAt, input.isPublished, createdBy],
+        `insert into public.announcements (internal_title, image_path, orientation, publish_at, expires_at, is_published, created_by)
+         values ($1, $2, $3, $4, $5, $6, $7) returning *`,
+        [input.internalTitle, input.imagePath, input.orientation, input.publishAt, input.expiresAt, input.isPublished, createdBy],
       );
       return toAnnouncement(row!);
     },

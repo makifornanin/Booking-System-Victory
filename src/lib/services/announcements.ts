@@ -39,6 +39,7 @@ export async function createAnnouncement(
 
   const fields = announcementFieldsSchema.safeParse({
     internalTitle: formData.get("internalTitle") ?? "",
+    orientation: formData.get("orientation") ?? "",
     publishAt: formData.get("publishAt") ?? "",
     expiresAt: formData.get("expiresAt") ?? undefined,
     publish: formData.get("publish") ?? undefined,
@@ -63,6 +64,7 @@ export async function createAnnouncement(
       {
         internalTitle: fields.data.internalTitle,
         imagePath: path,
+        orientation: fields.data.orientation,
         publishAt: fields.data.publishAt.toISOString(),
         expiresAt: fields.data.expiresAt?.toISOString() ?? null,
         isPublished: fields.data.publish,
@@ -89,6 +91,7 @@ export async function updateAnnouncement(
 
   const fields = announcementFieldsSchema.safeParse({
     internalTitle: formData.get("internalTitle") ?? "",
+    orientation: formData.get("orientation") ?? "",
     publishAt: formData.get("publishAt") ?? "",
     expiresAt: formData.get("expiresAt") ?? undefined,
     publish: formData.get("publish") ?? undefined,
@@ -120,6 +123,7 @@ export async function updateAnnouncement(
   try {
     const updated = await deps.repo.updateAnnouncement(existing.id, {
       internalTitle: fields.data.internalTitle,
+      orientation: fields.data.orientation,
       publishAt: fields.data.publishAt.toISOString(),
       expiresAt: fields.data.expiresAt?.toISOString() ?? null,
       isPublished: fields.data.publish,

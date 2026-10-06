@@ -173,6 +173,7 @@ export function createDemoSeed(): DemoState {
     id: `e4b2c9a1-7d3e-4f2a-8b1c-30000000000${n}`,
     internalTitle: title,
     imagePath: `demo/posters/${file}`,
+    orientation: "portrait",
     publishAt: new Date(now.getTime() - n * 86_400_000).toISOString(),
     expiresAt: null,
     isPublished: true,
@@ -183,6 +184,7 @@ export function createDemoSeed(): DemoState {
   });
 
   const announcements: Announcement[] = [
+    poster(7, "Worship Night", "worship-night.svg", { orientation: "landscape", publishAt: new Date(now.getTime() - 3_600_000).toISOString() }),
     poster(1, "Sunday Celebration – this week", "sunday-celebration.svg", {}),
     poster(2, "Youth Night", "youth-night.svg", {}),
     poster(3, "Volunteer Orientation", "volunteer-orientation.svg", {}),

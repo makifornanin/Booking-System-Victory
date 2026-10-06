@@ -97,6 +97,7 @@ export interface AnnouncementRow {
   id: string;
   internal_title: string;
   image_path: string;
+  orientation: string;
   publish_at: Timestamp;
   expires_at: Timestamp | null;
   is_published: boolean;
@@ -222,6 +223,7 @@ export function toAnnouncement(row: AnnouncementRow): Announcement {
     id: row.id,
     internalTitle: row.internal_title,
     imagePath: row.image_path,
+    orientation: row.orientation === "landscape" ? "landscape" : "portrait",
     publishAt: iso(row.publish_at),
     expiresAt: isoOrNull(row.expires_at),
     isPublished: row.is_published,

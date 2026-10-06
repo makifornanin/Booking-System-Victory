@@ -21,6 +21,7 @@ export const announcementFieldsSchema = z
       .trim()
       .min(1, { error: "Enter an internal title." })
       .max(120, { error: "Keep the title under 120 characters." }),
+    orientation: z.enum(["portrait", "landscape"], { error: "Choose portrait or landscape." }),
     publishAt: localDateTime("publish date"),
     expiresAt: z
       .string()

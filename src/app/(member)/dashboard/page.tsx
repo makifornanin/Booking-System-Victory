@@ -43,9 +43,15 @@ export default async function DashboardPage() {
         </Suspense>
       </section>
 
-      <Suspense fallback={<BulletinSkeleton />}>
-        <Bulletin />
+      <Suspense fallback={<Skeleton className="h-28" />}>
+        <Verse />
       </Suspense>
+
+      <div className="border-t border-line pt-14">
+        <Suspense fallback={<BulletinSkeleton />}>
+          <Bulletin />
+        </Suspense>
+      </div>
     </div>
   );
 }
@@ -83,12 +89,16 @@ async function NextBooking({ userId }: { userId: string }) {
   );
 }
 
+async function Verse() {
+  return <VerseOfTheDay verse={await getVerseOfTheDay()} />;
+}
+
 async function Bulletin() {
   const now = new Date();
-  const [announcements, verse] = await Promise.all([(await getRepositoryForRequest()).listLiveAnnouncements(), getVerseOfTheDay()]);
+  const announcements = await (await getRepositoryForRequest()).listLiveAnnouncements();
   const posters: Poster[] = selectLiveAnnouncements(announcements, now).flatMap((item) => {
     const url = imageUrl(item.imagePath);
-    return url ? [{ id: item.id, title: item.internalTitle, url }] : [];
+    return url ? [{ id: item.id, title: item.internalTitle, url, orientation: item.orientation }] : [];
   });
 
   return (
@@ -100,12 +110,9 @@ async function Bulletin() {
         {posters.length > 0 && <p className="hidden text-sm text-muted sm:block">Select a poster to see it in full</p>}
       </div>
       {posters.length > 0 ? (
-        <PosterBoard posters={posters} aside={<VerseOfTheDay verse={verse} />} />
+        <PosterBoard posters={posters} />
       ) : (
-        <div className="grid gap-10 lg:grid-cols-12">
-          <EmptyState className="lg:col-span-7" title="No announcements this week" description="Posters from the church office will appear here." />
-          <VerseOfTheDay verse={verse} className="lg:col-span-5" />
-        </div>
+        <EmptyState variant="quiet" title="No announcements this week" description="Posters from the church office will appear here." />
       )}
     </section>
   );
@@ -113,14 +120,11 @@ async function Bulletin() {
 
 function BulletinSkeleton() {
   return (
-    <div className="grid gap-8 lg:grid-cols-12" aria-busy="true" aria-label="Loading the bulletin">
-      <Skeleton className="aspect-[4/5] lg:col-span-7" />
-      <div className="space-y-6 lg:col-span-5">
-        <Skeleton className="h-40" />
-        <div className="grid grid-cols-2 gap-4">
-          <Skeleton className="aspect-[4/5]" />
-          <Skeleton className="aspect-[4/5]" />
-        </div>
+    <div className="space-y-8" aria-busy="true" aria-label="Loading announcements">
+      <Skeleton className="h-9 w-72" />
+      <div className="flex flex-wrap gap-5">
+        <Skeleton className="aspect-video w-full sm:w-[533px] lg:w-[711px]" />
+        <Skeleton className="aspect-[4/5] w-full max-w-[340px] sm:w-[240px] lg:w-[320px]" />
       </div>
     </div>
   );

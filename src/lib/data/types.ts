@@ -92,10 +92,14 @@ export interface NewBooking {
   endTime: string;
 }
 
+export type PosterOrientation = "portrait" | "landscape";
+
 export interface Announcement {
   id: string;
   internalTitle: string;
   imagePath: string;
+  /** Portrait posters are shown at 4:5, landscape at 16:9. */
+  orientation: PosterOrientation;
   publishAt: string;
   expiresAt: string | null;
   isPublished: boolean;
@@ -107,6 +111,7 @@ export interface Announcement {
 export interface AnnouncementInput {
   internalTitle: string;
   imagePath: string;
+  orientation: PosterOrientation;
   publishAt: string;
   expiresAt: string | null;
   isPublished: boolean;

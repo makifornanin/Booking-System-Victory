@@ -62,18 +62,21 @@ export default async function AdminAnnouncementsPage({ searchParams }: PageProps
           ) : (
             <ul className="divide-y divide-line border-b border-line">
               {list.map((item) => (
-                <li key={item.id} className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-4 gap-y-2 py-4 sm:grid-cols-[72px_minmax(0,1fr)_auto] sm:items-center">
+                <li key={item.id} className="grid grid-cols-[80px_minmax(0,1fr)] gap-x-4 gap-y-2 py-4 sm:grid-cols-[96px_minmax(0,1fr)_auto] sm:items-center">
                   <a
                     href={item.imageUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="relative block aspect-[4/5] overflow-hidden rounded-sm bg-sunken ring-1 ring-line"
+                    className={`relative mx-auto block overflow-hidden rounded-sm bg-sunken ring-1 ring-line ${item.orientation === "landscape" ? "aspect-video w-full" : "aspect-[4/5] w-16 sm:w-[4.5rem]"}`}
                     aria-label={`Open poster: ${item.internalTitle}`}
                   >
-                    {item.imageUrl && <Image src={item.imageUrl} alt="" fill sizes="72px" unoptimized={!item.imageUrl.startsWith("https://")} className="object-cover" />}
+                    {item.imageUrl && <Image src={item.imageUrl} alt="" fill sizes="96px" unoptimized={!item.imageUrl.startsWith("https://")} className="object-cover" />}
                   </a>
                   <div className="min-w-0">
-                    <AnnouncementStatusMark status={item.status} />
+                    <p className="flex flex-wrap items-center gap-x-3">
+                      <AnnouncementStatusMark status={item.status} />
+                      <span className="text-xs font-semibold text-muted">{item.orientation === "landscape" ? "Landscape 16:9" : "Portrait 4:5"}</span>
+                    </p>
                     <p className="mt-0.5 truncate text-[15px] font-extrabold">{item.internalTitle}</p>
                     <p className="text-[13px] text-muted tabular-nums">
                       {formatDate(item.publishAt, "d MMM yyyy, h:mm a")} → {item.expiresAt ? formatDate(item.expiresAt, "d MMM yyyy, h:mm a") : "no expiry"}
@@ -85,6 +88,7 @@ export default async function AdminAnnouncementsPage({ searchParams }: PageProps
                       values={{
                         id: item.id,
                         internalTitle: item.internalTitle,
+                        orientation: item.orientation,
                         publishAt: toLocalDateTimeInput(item.publishAt),
                         expiresAt: item.expiresAt ? toLocalDateTimeInput(item.expiresAt) : "",
                         isPublished: item.isPublished,

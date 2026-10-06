@@ -197,6 +197,17 @@ describe("member permissions and booking constraints", () => {
     await as(ALICE, async () => expect(await rows(`select id from public.announcements`)).toHaveLength(0));
   });
 
+  it("stores poster orientation (portrait by default) and rejects anything else", async () => {
+    expect((await rows<{ orientation: string }>(`select orientation from public.announcements`))[0].orientation).toBe("portrait");
+    await as(ADMIN, async () => {
+      const wide = await rows<{ orientation: string }>(
+        `insert into public.announcements (internal_title, image_path, created_by, orientation) values ('Wide', 'announcements/w.png', '${ADMIN}', 'landscape') returning orientation`,
+      );
+      expect(wide[0].orientation).toBe("landscape");
+      expect(await errorCode(`insert into public.announcements (internal_title, image_path, created_by, orientation) values ('Bad', 'announcements/b.png', '${ADMIN}', 'square')`)).toBe("23514");
+    });
+  });
+
   it("caps open pending requests per member", async () => {
     await db.exec(`insert into public.profiles (id, email, full_name, access_status) values ('${CAROL}', 'carol@test', 'Carol', 'active')`);
     const insertFor = (offsetDays: number, name: string) => {

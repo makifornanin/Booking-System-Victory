@@ -100,6 +100,8 @@ Uploads go under these prefixes: `announcements/`, `rooms/` (room photos) and `m
 ### GHL
 
 - **Calendars:** one calendar per room, using a 30-minute slot interval and **at least one team member**. `npm run db:migrate` copies `GHL_CALENDAR_*` into `rooms.ghl_calendar_id`.
+- **Keep the room calendars consistent:** give every room calendar the same minimum scheduling notice and staff hours. A calendar with a longer notice (for example 4 days instead of 4 hours) shows no times on nearby dates. `npm run diagnose:availability` lists any setting that differs.
+- **One team member per room:** GHL blocks a team member's time across every calendar they belong to. If all room calendars share one person, a booking in one room also removes that time from the other rooms.
 - **Staff assignment:** appointments are assigned to the calendar's primary (or first selected) team member. The app reads that member from the calendar and caches it for 10 minutes. If a calendar has no team member, approval stops with a clear message, and the booking stays pending.
 - **Booking fields:** set the contact custom field IDs in `GHL_FIELD_BOOKING_*_ID`. If any are blank, the app looks them up by field key (`contact.booking_room`, …).
 - **Account fields:** create a contact text field with key `contact.account_access_reason` and set `GHL_FIELD_ACCOUNT_ACCESS_REASON_ID`. A `contact.account_status` field (`GHL_FIELD_ACCOUNT_STATUS_ID`) is optional.
@@ -183,6 +185,7 @@ Set `ESV_API_KEY` (from [api.esv.org](https://api.esv.org)). The dashboard picks
 ```bash
 npm run check:integrations   # read-only: Neon, RLS, Neon Auth, bucket, GHL calendars (interval, team member), contacts, fields, scopes, Google config, ESV
 npm run check:bundle         # after `npm run build`: no secret values or server-only code in browser assets
+npm run diagnose:availability -- --from 2026-10-07 --to 2026-10-14   # read-only: compares the five room calendars' settings, staff and free slots per Manila date
 ```
 
 ## Public pages

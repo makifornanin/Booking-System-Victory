@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" font-family="'Nunito Sans', 'Segoe UI', Arial, sans-serif">
+  <rect width="1600" height="900" fill="#02458d"/>
+  <text x="120" y="250" font-size="34" font-weight="800" letter-spacing="7" fill="#ffffff" opacity="0.85">ALL CHURCH</text>
+  <rect x="120" y="288" width="120" height="12" fill="#f0994e"/>
+  <text x="120" y="470" font-size="150" font-weight="900" letter-spacing="1" fill="#ffffff">WORSHIP NIGHT</text>
+  <text x="120" y="590" font-size="48" font-weight="800" fill="#ffffff">Friday · 7:00 PM · Main Hall</text>
+  <text x="120" y="650" font-size="38" font-weight="600" fill="#ffffff" opacity="0.8">An evening of worship and prayer</text>
+  <text x="120" y="810" font-size="24" font-weight="700" letter-spacing="4" fill="#ffffff" opacity="0.55">SAMPLE POSTER · DEMO DATA</text>
+</svg>

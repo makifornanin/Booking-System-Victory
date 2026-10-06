@@ -15,7 +15,8 @@
     "db:bootstrap-admin": "node --env-file-if-exists=.env.local scripts/bootstrap-admin.mjs",
     "check:integrations": "node --env-file-if-exists=.env.local scripts/check-integrations.mjs",
     "storage:setup": "node --env-file-if-exists=.env.local scripts/setup-storage.mjs",
-    "check:bundle": "node --env-file-if-exists=.env.local scripts/check-bundle-secrets.mjs"
+    "check:bundle": "node --env-file-if-exists=.env.local scripts/check-bundle-secrets.mjs",
+    "diagnose:availability": "node --env-file-if-exists=.env.local scripts/diagnose-availability.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",
@@ -29,6 +30,7 @@
     "next": "16.3.8",
     "pg": "^8.23.1",
     "react": "19.2.8",
+    "react-day-picker": "^9.14.0",
     "react-dom": "19.2.8",
     "server-only": "^0.0.1",
     "sonner": "^2.0.8",
