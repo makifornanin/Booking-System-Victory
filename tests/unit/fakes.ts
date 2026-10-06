@@ -24,6 +24,7 @@ export interface FakeGhlOptions {
   failCreate?: boolean | GhlError;
   failContactUpdate?: boolean;
   failTag?: boolean;
+  failMove?: boolean;
   blocked?: { from: string; to: string }[];
   assignedUserId?: string | null;
   slotDurationMinutes?: number;
@@ -33,6 +34,8 @@ export interface FakeGhlOptions {
 export function fakeGhl(options: FakeGhlOptions = {}) {
   const log = {
     appointments: [] as (AppointmentRequest & { id: string })[],
+    moves: [] as { appointmentId: string; calendarId: string; assignedUserId: string; start: Date; end: Date; title: string }[],
+    removedTags: [] as { contactId: string; tag: string }[],
     cancelled: [] as string[],
     deleted: [] as string[],
     contacts: new Map<string, GhlContactRef & { person: GhlPerson }>(),
@@ -81,6 +84,10 @@ export function fakeGhl(options: FakeGhlOptions = {}) {
       log.appointments.push({ ...request, id });
       return { id };
     },
+    async moveAppointment(appointmentId, request) {
+      if (options.failMove) throw new GhlError("unavailable", "GHL down");
+      log.moves.push({ appointmentId, ...request });
+    },
     async cancelAppointment(id) {
       log.cancelled.push(id);
     },
@@ -91,6 +98,10 @@ export function fakeGhl(options: FakeGhlOptions = {}) {
       if (options.failTag) throw new GhlError("unavailable", "GHL down");
       log.tags.push({ contactId: contact.id, tag });
     },
+    async removeTag(contact, tag) {
+      if (options.failTag) throw new GhlError("unavailable", "GHL down");
+      log.removedTags.push({ contactId: contact.id, tag });
+    },
   };
   return { gateway, log };
 }
@@ -100,6 +111,7 @@ export function fakeGoogle(options: { connected?: string[]; fail?: boolean; requ
   const events = new Map<string, CalendarEventInput & { userId: string }>();
   const deleted: string[] = [];
   let createCalls = 0;
+  let updateCalls = 0;
   const gateway: GoogleCalendarGateway = {
     mode: "google",
     required: options.required ?? true,
@@ -117,10 +129,16 @@ export function fakeGoogle(options: { connected?: string[]; fail?: boolean; requ
       if (!events.has(id)) events.set(id, { ...event, userId });
       return id;
     },
+    async updateBookingEvent(userId, eventId, event) {
+      updateCalls++;
+      if (options.fail) throw new Error("Google down");
+      events.set(eventId, { ...event, userId });
+      return eventId;
+    },
     async deleteBookingEvent(_userId, eventId) {
       deleted.push(eventId);
       events.delete(eventId);
     },
   };
-  return { gateway, events, deleted, connected, createCalls: () => createCalls, setFail: (fail: boolean) => (options.fail = fail) };
+  return { gateway, events, deleted, connected, createCalls: () => createCalls, updateCalls: () => updateCalls, setFail: (fail: boolean) => (options.fail = fail) };
 }

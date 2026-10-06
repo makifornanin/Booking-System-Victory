@@ -180,6 +180,38 @@ export async function createAppointment(input: CreateAppointmentInput): Promise<
   return { id: result.id };
 }
 
+export interface MoveAppointmentInput {
+  calendarId: string;
+  assignedUserId: string;
+  start: Date;
+  end: Date;
+  title: string;
+}
+
+/**
+ * Moves an existing appointment to a new time (approved reschedule). The same
+ * appointment id is kept, it stays confirmed, and GHL's own notification is off:
+ * the reschedule email is sent by the tag workflow instead.
+ */
+export async function moveAppointment(appointmentId: string, input: MoveAppointmentInput): Promise<void> {
+  await ghlRequest(`/calendars/events/appointments/${encodeURIComponent(appointmentId)}`, {
+    method: "PUT",
+    version: GHL_API_VERSION.calendars,
+    body: {
+      calendarId: input.calendarId,
+      assignedUserId: input.assignedUserId,
+      startTime: toGhlDateTime(input.start),
+      endTime: toGhlDateTime(input.end),
+      title: input.title,
+      appointmentStatus: "confirmed",
+      ignoreFreeSlotValidation: true,
+      toNotify: false,
+    },
+    schema: z.unknown(),
+    timeoutMs: 20_000,
+  });
+}
+
 /** Marks an appointment cancelled (keeps GHL history; frees the slot). */
 export async function cancelAppointment(appointmentId: string): Promise<void> {
   await ghlRequest(`/calendars/events/appointments/${encodeURIComponent(appointmentId)}`, {

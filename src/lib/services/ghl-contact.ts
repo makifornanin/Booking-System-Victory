@@ -17,7 +17,7 @@ export interface ContactOwner {
  */
 export async function syncGhlContact(
   calendar: CalendarGateway,
-  repo: Repository,
+  repo: Pick<Repository, "saveGhlContactId">,
   owner: ContactOwner,
   update: { includePerson?: boolean; fields?: ContactFieldValues },
 ): Promise<GhlContactRef> {

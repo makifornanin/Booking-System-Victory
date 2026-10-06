@@ -28,6 +28,12 @@ export function createDemoGoogleGateway(): GoogleCalendarGateway {
       }
       return id;
     },
+    async updateBookingEvent(userId, eventId, event) {
+      if (!state.googleConnections.has(userId)) throw new Error("Google Calendar isn't connected.");
+      if (event.summary.toLowerCase().includes(DEMO_GOOGLE_FAILURE_MARKER)) throw new Error("Simulated Google Calendar outage (demo).");
+      state.googleEvents.set(eventId, { userId, summary: event.summary, start: event.start.toISOString(), end: event.end.toISOString() });
+      return eventId;
+    },
     async deleteBookingEvent(_userId, eventId) {
       state.googleEvents.delete(eventId);
     },

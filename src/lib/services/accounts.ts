@@ -3,8 +3,8 @@ import type { SessionUser } from "@/lib/auth/provider";
 import { RepositoryError, type Repository } from "@/lib/data/repository";
 import type { AccessChange, AccessStatus, Profile } from "@/lib/data/types";
 import { ghlUserMessage } from "@/lib/ghl/errors";
-import { ACCOUNT_TAGS, type CalendarGateway, type ContactFieldValues } from "@/lib/ghl/gateway";
-import { syncGhlContact } from "@/lib/services/ghl-contact";
+import { ACCOUNT_TAGS, PENDING_ACCOUNT_TAG, type CalendarGateway, type ContactFieldValues } from "@/lib/ghl/gateway";
+import { syncGhlContact, type ContactOwner } from "@/lib/services/ghl-contact";
 import { failure, fieldErrorsFrom, success, type ServiceResult } from "@/lib/services/result";
 
 export interface AccountDeps {
@@ -60,6 +60,8 @@ async function notify(profile: Profile, change: AccessChange, reason: string | n
   if (change === "denied" || change === "revoked") fields.accountAccessReason = reason ?? "";
   try {
     const contact = await syncGhlContact(deps.calendar, deps.repo, profile, { includePerson: true, fields });
+    // The account has been reviewed, so it no longer waits in the "pending review" workflow.
+    if (change === "approved" || change === "denied") await deps.calendar.removeTag(contact, PENDING_ACCOUNT_TAG);
     await deps.calendar.addTriggerTag(contact, ACCOUNT_TAGS[change]);
     return null;
   } catch (error) {
@@ -104,7 +106,33 @@ export async function changeAccess(rawInput: unknown, actor: SessionUser | null,
   );
 }
 
-/** Re-sends the email for the user's latest access change. */
+export interface PendingAccountDeps {
+  calendar: CalendarGateway;
+  saveGhlContactId: (userId: string, contactId: string) => Promise<void>;
+}
+
+/**
+ * New sign-up: finds or creates the member's GHL contact (name, email, phone),
+ * then re-adds the "pending review" tag so the internal admin notification
+ * workflow runs. Returns an error message instead of throwing: registration
+ * never depends on GHL.
+ */
+export async function notifyPendingAccount(owner: ContactOwner, deps: PendingAccountDeps): Promise<string | null> {
+  if (!owner.email) return "This person has no email address on file.";
+  try {
+    const contact = await syncGhlContact(deps.calendar, { saveGhlContactId: deps.saveGhlContactId }, owner, {
+      includePerson: true,
+      fields: { accountStatus: "pending" },
+    });
+    await deps.calendar.addTriggerTag(contact, PENDING_ACCOUNT_TAG);
+    return null;
+  } catch (error) {
+    console.error(`[accounts] pending-review notification failed for ${owner.id}:`, error instanceof Error ? error.message : error);
+    return ghlUserMessage(error);
+  }
+}
+
+/** Re-sends the email for the user's latest access change (or the pending-review alert for a new account). */
 export async function retryAccessNotification(rawInput: unknown, actor: SessionUser | null, deps: AccountDeps): Promise<ServiceResult> {
   const denied = adminGuard(actor);
   if (denied) return denied;
@@ -113,9 +141,12 @@ export async function retryAccessNotification(rawInput: unknown, actor: SessionU
 
   const [profile, events] = await Promise.all([deps.repo.getProfile(parsed.data.userId), deps.repo.listAccessEvents(parsed.data.userId)]);
   const latest = events[0];
-  if (!profile || !latest) return failure("not_found", "There's no access change to notify about.");
+  if (!profile) return failure("not_found", "We couldn't find that user.");
+  if (!latest && profile.accessStatus !== "pending") return failure("not_found", "There's no access change to notify about.");
 
-  const notificationError = await notify(profile, latest.change, latest.reason, deps);
+  const notificationError = latest
+    ? await notify(profile, latest.change, latest.reason, deps)
+    : await notifyPendingAccount(profile, { calendar: deps.calendar, saveGhlContactId: (userId, contactId) => deps.repo.saveGhlContactId(userId, contactId) });
   await recordNotification(deps, profile.id, notificationError);
   return notificationError ? failure("calendar_error", `The notification failed again: ${notificationError}`) : success(undefined, "Notification sent.");
 }

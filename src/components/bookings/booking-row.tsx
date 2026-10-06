@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { CalendarCheck2, CalendarX2 } from "lucide-react";
+import { ArrowRightLeft, CalendarCheck2, CalendarX2 } from "lucide-react";
 import { eventTypeLabel } from "@/lib/config";
-import type { BookingWithRoom } from "@/lib/data/types";
-import { canMemberCancel } from "@/lib/domain/booking-rules";
+import type { BookingWithRoom, RescheduleRequest } from "@/lib/data/types";
+import { canMemberCancel, canRequestReschedule } from "@/lib/domain/booking-rules";
 import { formatDate, formatTimeRange } from "@/lib/domain/time";
 import { cn } from "@/lib/utils";
-import { CancelBookingButton, RetryCalendarSyncButton } from "@/components/bookings/booking-actions";
+import { CancelBookingButton, RetryCalendarSyncButton, WithdrawRescheduleButton } from "@/components/bookings/booking-actions";
+import { buttonStyles } from "@/components/ui/button";
 import { BookingStatus } from "@/components/ui/status";
 
 /** Serif day numeral with the weekday underneath, like a printed calendar column. */
@@ -18,9 +19,51 @@ export function DateColumn({ iso, muted }: { iso: string; muted?: boolean }) {
   );
 }
 
+const when = (start: string, end: string) => `${formatDate(start, "EEE d MMM")} · ${formatTimeRange(start, end)}`;
+
+/** Pending request: the current booking stays as it is until the office approves the change. */
+function RescheduleStatus({ booking, requests, showActions }: { booking: BookingWithRoom; requests: RescheduleRequest[]; showActions: boolean }) {
+  const pending = requests.find((r) => r.status === "pending");
+  if (pending) {
+    return (
+      <div className="mt-4 border-l-2 border-pending pl-3.5 text-sm">
+        <p className="flex items-center gap-1.5 font-bold text-pending">
+          <ArrowRightLeft className="size-3.5" aria-hidden />
+          Reschedule requested · pending admin review
+        </p>
+        <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-[13px]">
+          <dt className="text-muted">Current</dt>
+          <dd className="font-semibold text-ink tabular-nums">{when(booking.startTime, booking.endTime)}</dd>
+          <dt className="text-muted">Requested</dt>
+          <dd className="font-semibold text-ink tabular-nums">{when(pending.requestedStart, pending.requestedEnd)}</dd>
+        </dl>
+        <p className="mt-1.5 text-[13px] text-muted">Your current booking remains confirmed until this request is approved.</p>
+        {showActions && (
+          <div className="mt-1.5 -ml-3">
+            <WithdrawRescheduleButton requestId={pending.id} bookingId={booking.id} />
+          </div>
+        )}
+      </div>
+    );
+  }
+  const latest = requests[0];
+  if (latest?.status === "approved" && latest.requestedStart === booking.startTime) {
+    return <p className="mt-2 text-[13px] text-muted">Rescheduled from {when(latest.originalStart, latest.originalEnd)}</p>;
+  }
+  if (latest?.status === "denied") {
+    return (
+      <p className="mt-2 text-[13px] text-muted">
+        <span className="font-semibold text-ink-soft">Reschedule request denied</span>
+        {latest.denialReason ? ` · ${latest.denialReason}` : ""}. Your booking stays as shown.
+      </p>
+    );
+  }
+  return null;
+}
+
 function CalendarSyncLine({ booking, showRetry }: { booking: BookingWithRoom; showRetry: boolean }) {
   if (booking.status !== "approved") return null;
-  if (booking.googleCalendarEventId) {
+  if (booking.googleCalendarEventId && !booking.googleCalendarSyncError) {
     return (
       <p className="mt-2 flex items-center gap-1.5 text-[13px] font-semibold text-approved">
         <CalendarCheck2 className="size-3.5" aria-hidden />
@@ -46,13 +89,17 @@ export function BookingRow({
   highlight,
   showActions = true,
   detailHref,
+  reschedules = [],
 }: {
   booking: BookingWithRoom;
   now: Date;
   highlight?: boolean;
   showActions?: boolean;
   detailHref?: string;
+  /** This booking's reschedule requests, newest first. */
+  reschedules?: RescheduleRequest[];
 }) {
+  const hasPendingReschedule = reschedules.some((r) => r.status === "pending");
   const past = new Date(booking.endTime) <= now;
   const muted = past || booking.status === "cancelled" || booking.status === "denied";
   return (
@@ -89,10 +136,16 @@ export function BookingRow({
             {booking.denialReason}
           </p>
         )}
+        <RescheduleStatus booking={booking} requests={reschedules} showActions={showActions} />
         <CalendarSyncLine booking={booking} showRetry={showActions} />
       </div>
       <div className="col-start-2 flex flex-wrap items-center gap-3 sm:col-start-auto sm:flex-col sm:items-end sm:justify-start">
         <BookingStatus status={booking.status} />
+        {showActions && canRequestReschedule(booking, now) && !hasPendingReschedule && (
+          <Link href={`/bookings/${booking.id}/reschedule`} className={buttonStyles({ variant: "quiet", size: "sm" })}>
+            Request reschedule
+          </Link>
+        )}
         {showActions && canMemberCancel(booking, now) && (
           <CancelBookingButton bookingId={booking.id} eventName={booking.eventName} approved={booking.status === "approved"} label={booking.status === "approved" ? "Cancel booking" : "Withdraw"} />
         )}

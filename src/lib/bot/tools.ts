@@ -14,6 +14,7 @@ import { normalizeSenderPhone, parseBotDate, parseBotWindow, type BotWindow } fr
 import { resolveRoom } from "@/lib/bot/rooms";
 import { getRoomDayAvailability, type RoomDayAvailability } from "@/lib/services/availability";
 import { BOOKING_RACE_MESSAGE, createBookingRequest } from "@/lib/services/bookings";
+import type { ReviewAlerts } from "@/lib/services/review-alerts";
 
 /** What the bot knows about the person behind a WhatsApp number. Never returned as-is. */
 export interface BotProfile {
@@ -35,6 +36,8 @@ export interface BotDeps {
   google: GoogleCalendarGateway;
   now: () => Date;
   siteUrl: string;
+  /** Optional internal "pending review" GHL alert for new requests. */
+  reviewAlerts?: ReviewAlerts;
 }
 
 // --- Identity ----------------------------------------------------------------
@@ -415,7 +418,7 @@ export async function createBooking(body: unknown, deps: BotDeps): Promise<BotRe
       attendeeCount: input.data.attendeeCount,
     },
     sessionFor(user),
-    { repo, calendar: deps.calendar, google: deps.google, now: deps.now },
+    { repo, calendar: deps.calendar, google: deps.google, now: deps.now, reviewAlerts: deps.reviewAlerts },
     { source: "whatsapp", whatsappMessageId: input.data.whatsappMessageId },
   );
 

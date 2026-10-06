@@ -91,6 +91,34 @@ export interface BookingDetails extends BookingWithRoom {
   reviewer: Pick<Profile, "id" | "fullName"> | null;
 }
 
+export type RescheduleStatus = "pending" | "approved" | "denied" | "cancelled";
+
+/** A member's request to move an approved booking to a new time in the same room. */
+export interface RescheduleRequest {
+  id: string;
+  bookingId: string;
+  roomId: string;
+  requestedBy: string;
+  originalStart: string;
+  originalEnd: string;
+  requestedStart: string;
+  requestedEnd: string;
+  status: RescheduleStatus;
+  denialReason: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  reviewLockedAt: string | null;
+  reviewLockedBy: string | null;
+  /** Last GHL email problem for this request, if any. */
+  notificationError: string | null;
+  createdAt: string;
+}
+
+export interface RescheduleRequestDetails extends RescheduleRequest {
+  booking: BookingDetails;
+  reviewer: Pick<Profile, "id" | "fullName"> | null;
+}
+
 export interface NewBooking {
   userId: string;
   source?: BookingSource;

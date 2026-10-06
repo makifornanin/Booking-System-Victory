@@ -2,10 +2,10 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { MAX_PENDING_PER_USER } from "@/lib/config";
 import { PENDING_LIMIT_MESSAGE, RepositoryError, type ImageStorage, type Repository } from "@/lib/data/repository";
-import type { AccessChange, AccessStatus, Announcement, Booking, BookingDetails, BookingWithRoom, Profile } from "@/lib/data/types";
+import type { AccessChange, AccessStatus, Announcement, Booking, BookingDetails, BookingWithRoom, Profile, RescheduleRequest, RescheduleStatus } from "@/lib/data/types";
 import type { BookingStatus } from "@/lib/domain/booking-rules";
 import { rangesOverlap, toRange } from "@/lib/domain/availability";
-import { isBlockingStatus } from "@/lib/domain/booking-rules";
+import { isBlockingStatus, validateBookingWindow } from "@/lib/domain/booking-rules";
 import { isLive } from "@/lib/domain/announcements";
 import { getDemoState, type DemoState, type DemoUser } from "@/lib/demo/store";
 
@@ -66,6 +66,18 @@ const copy = <T>(value: T): T => structuredClone(value);
  */
 export function createDemoRepository(actorId: string | null = null): Repository {
   const state = getDemoState();
+  const actorIsAdminNow = () => state.users.find((u) => u.id === actorId)?.role === "admin";
+  /** Mirrors RLS: members see their own requests, admins see all. */
+  const visibleRequest = (r: RescheduleRequest) => actorIsAdminNow() || r.requestedBy === actorId;
+  const pendingHolds = (roomId: string, excludeId?: string) => state.reschedules.filter((r) => r.roomId === roomId && r.status === "pending" && r.id !== excludeId);
+  const releaseHolds = (bookingId: string) => {
+    for (const r of state.reschedules) if (r.bookingId === bookingId && r.status === "pending") r.status = "cancelled";
+  };
+  const newestFirst = (list: RescheduleRequest[]) => [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const reviewerOf = (r: RescheduleRequest) => {
+    const reviewer = r.reviewedBy ? state.users.find((u) => u.id === r.reviewedBy) : undefined;
+    return reviewer ? { id: reviewer.id, fullName: reviewer.fullName } : null;
+  };
 
   return {
     async getProfile(userId) {
@@ -156,12 +168,11 @@ export function createDemoRepository(actorId: string | null = null): Repository 
       return copy(state.rooms.find((r) => r.id === id) ?? null);
     },
 
-    async getBusyRanges(roomId, from, to) {
+    async getBusyRanges(roomId, from, to, options) {
       const window = { start: from.getTime(), end: to.getTime() };
-      return state.bookings
-        .filter((b) => b.roomId === roomId && isBlockingStatus(b.status))
-        .map((b) => toRange(b.startTime, b.endTime))
-        .filter((range) => rangesOverlap(range, window));
+      const bookings = state.bookings.filter((b) => b.roomId === roomId && isBlockingStatus(b.status)).map((b) => toRange(b.startTime, b.endTime));
+      const holds = pendingHolds(roomId, options?.excludeRescheduleId).map((r) => toRange(r.requestedStart, r.requestedEnd));
+      return [...bookings, ...holds].filter((range) => rangesOverlap(range, window)).sort((a, b) => a.start - b.start);
     },
 
     async findConflictingBookings(roomId, range, excludeBookingId) {
@@ -192,9 +203,9 @@ export function createDemoRepository(actorId: string | null = null): Repository 
         throw new RepositoryError("duplicate", "That request was already received.");
       }
 
-      const overlaps = state.bookings.some(
-        (b) => b.roomId === input.roomId && isBlockingStatus(b.status) && rangesOverlap(toRange(b.startTime, b.endTime), range),
-      );
+      const overlaps =
+        state.bookings.some((b) => b.roomId === input.roomId && isBlockingStatus(b.status) && rangesOverlap(toRange(b.startTime, b.endTime), range)) ||
+        pendingHolds(input.roomId).some((r) => rangesOverlap(toRange(r.requestedStart, r.requestedEnd), range));
       if (overlaps) throw new RepositoryError("conflict", "That time overlaps another booking for this room.");
 
       const booking: Booking = {
@@ -315,6 +326,7 @@ export function createDemoRepository(actorId: string | null = null): Repository 
       if (new Date(booking.startTime).getTime() <= Date.now()) return null;
       if (booking.reviewLockedAt && Date.now() - new Date(booking.reviewLockedAt).getTime() < 2 * 60_000) return null;
       booking.status = "cancelled";
+      releaseHolds(booking.id);
       return copy(booking);
     },
 
@@ -322,7 +334,143 @@ export function createDemoRepository(actorId: string | null = null): Repository 
       const booking = state.bookings.find((b) => b.id === id);
       if (!booking || booking.status !== "approved") return null;
       booking.status = "cancelled";
+      releaseHolds(booking.id);
       return copy(booking);
+    },
+
+    // --- Reschedule requests (mirrors migration 0009) ------------------------
+
+    async insertRescheduleRequest(input) {
+      const booking = state.bookings.find((b) => b.id === input.bookingId);
+      if (!booking || booking.userId !== actorId) throw new RepositoryError("forbidden", "You do not have permission to do that.");
+      if (booking.status !== "approved") throw new RepositoryError("invalid", "Only approved bookings can be rescheduled.");
+      if (new Date(booking.startTime).getTime() <= Date.now()) throw new RepositoryError("invalid", "Past bookings can't be rescheduled.");
+      const problem = validateBookingWindow({ start: new Date(input.requestedStart), end: new Date(input.requestedEnd), now: new Date() });
+      if (problem) throw new RepositoryError("invalid", problem);
+      if (state.reschedules.some((r) => r.bookingId === booking.id && r.status === "pending")) {
+        throw new RepositoryError("duplicate", "That request was already received.");
+      }
+      const range = toRange(input.requestedStart, input.requestedEnd);
+      const overlaps =
+        state.bookings.some((b) => b.roomId === booking.roomId && isBlockingStatus(b.status) && rangesOverlap(toRange(b.startTime, b.endTime), range)) ||
+        pendingHolds(booking.roomId).some((r) => rangesOverlap(toRange(r.requestedStart, r.requestedEnd), range));
+      if (overlaps) throw new RepositoryError("conflict", "That time overlaps another booking for this room.");
+
+      const request: RescheduleRequest = {
+        id: randomUUID(),
+        bookingId: booking.id,
+        roomId: booking.roomId,
+        requestedBy: booking.userId,
+        originalStart: booking.startTime,
+        originalEnd: booking.endTime,
+        requestedStart: new Date(input.requestedStart).toISOString(),
+        requestedEnd: new Date(input.requestedEnd).toISOString(),
+        status: "pending",
+        denialReason: null,
+        reviewedBy: null,
+        reviewedAt: null,
+        reviewLockedAt: null,
+        reviewLockedBy: null,
+        notificationError: null,
+        createdAt: new Date().toISOString(),
+      };
+      state.reschedules.push(request);
+      return copy(request);
+    },
+
+    async getRescheduleRequest(id) {
+      const request = state.reschedules.find((r) => r.id === id && visibleRequest(r));
+      if (!request) return null;
+      const booking = state.bookings.find((b) => b.id === request.bookingId);
+      if (!booking) return null;
+      return copy({ ...request, booking: withDetails(state, booking), reviewer: reviewerOf(request) });
+    },
+
+    async listRescheduleRequestsForBooking(bookingId) {
+      return copy(newestFirst(state.reschedules.filter((r) => r.bookingId === bookingId && visibleRequest(r))));
+    },
+
+    async listRescheduleRequestsForUser(userId) {
+      return copy(newestFirst(state.reschedules.filter((r) => r.requestedBy === userId && visibleRequest(r))));
+    },
+
+    async listRescheduleRequestsByStatus(status, limit = 100) {
+      if (!actorIsAdminNow()) return [];
+      return copy(
+        state.reschedules
+          .filter((r) => r.status === status)
+          .sort((a, b) => (status === "pending" ? a.requestedStart.localeCompare(b.requestedStart) : (b.reviewedAt ?? b.createdAt).localeCompare(a.reviewedAt ?? a.createdAt)))
+          .slice(0, limit)
+          .flatMap((r) => {
+            const booking = state.bookings.find((b) => b.id === r.bookingId);
+            return booking ? [{ ...r, booking: withDetails(state, booking), reviewer: reviewerOf(r) }] : [];
+          }),
+      );
+    },
+
+    async countRescheduleRequestsByStatus() {
+      const counts: Record<RescheduleStatus, number> = { pending: 0, approved: 0, denied: 0, cancelled: 0 };
+      for (const request of state.reschedules) counts[request.status]++;
+      return counts;
+    },
+
+    async claimRescheduleForReview(id, adminId, now, staleBefore) {
+      const request = state.reschedules.find((r) => r.id === id);
+      if (!request || request.status !== "pending") return null;
+      if (request.reviewLockedAt && new Date(request.reviewLockedAt) >= staleBefore) return null;
+      request.reviewLockedAt = now.toISOString();
+      request.reviewLockedBy = adminId;
+      return copy(request);
+    },
+
+    async releaseRescheduleClaim(id, adminId) {
+      const request = state.reschedules.find((r) => r.id === id);
+      if (request && request.reviewLockedBy === adminId) {
+        request.reviewLockedAt = null;
+        request.reviewLockedBy = null;
+      }
+    },
+
+    async applyReschedule(id) {
+      if (!actorIsAdminNow()) throw new RepositoryError("forbidden", "You do not have permission to do that.");
+      const request = state.reschedules.find((r) => r.id === id);
+      if (!request || request.status !== "pending" || request.reviewLockedBy !== actorId) return null;
+      const booking = state.bookings.find((b) => b.id === request.bookingId);
+      if (!booking || booking.status !== "approved" || booking.startTime !== request.originalStart || booking.endTime !== request.originalEnd) {
+        throw new RepositoryError("invalid", "The booking changed after this request was made, so it can't be applied. Deny it and ask the member to request again.");
+      }
+      if (new Date(request.requestedStart).getTime() <= Date.now()) throw new RepositoryError("invalid", "That time has already passed. Choose a future time.");
+      const range = toRange(request.requestedStart, request.requestedEnd);
+      const overlaps =
+        state.bookings.some((b) => b.id !== booking.id && b.roomId === booking.roomId && isBlockingStatus(b.status) && rangesOverlap(toRange(b.startTime, b.endTime), range)) ||
+        pendingHolds(booking.roomId, request.id).some((r) => rangesOverlap(toRange(r.requestedStart, r.requestedEnd), range));
+      if (overlaps) throw new RepositoryError("conflict", "That time overlaps another booking for this room.");
+
+      const nowIso = new Date().toISOString();
+      Object.assign(request, { status: "approved", reviewedBy: actorId, reviewedAt: nowIso, reviewLockedAt: null, reviewLockedBy: null });
+      booking.startTime = request.requestedStart;
+      booking.endTime = request.requestedEnd;
+      return copy(booking);
+    },
+
+    async markRescheduleDenied(id, adminId, reason, now) {
+      const request = state.reschedules.find((r) => r.id === id);
+      if (!request || request.status !== "pending" || request.reviewLockedBy !== adminId) return null;
+      Object.assign(request, { status: "denied", denialReason: reason, reviewedBy: adminId, reviewedAt: now.toISOString(), reviewLockedAt: null, reviewLockedBy: null });
+      return copy(request);
+    },
+
+    async cancelOwnReschedule(id) {
+      const request = state.reschedules.find((r) => r.id === id);
+      if (!request || request.requestedBy !== actorId || request.status !== "pending") return null;
+      if (request.reviewLockedAt && Date.now() - new Date(request.reviewLockedAt).getTime() < 2 * 60_000) return null;
+      request.status = "cancelled";
+      return copy(request);
+    },
+
+    async setRescheduleNotificationResult(id, error) {
+      const request = state.reschedules.find((r) => r.id === id);
+      if (request) request.notificationError = error;
     },
 
     async setCalendarSync(bookingId, eventId, error) {

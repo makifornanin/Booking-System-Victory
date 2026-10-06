@@ -16,6 +16,21 @@ export const ACCOUNT_TAGS: Record<AccessChange, string> = {
   restored: "booking-system-user-restored",
 };
 
+/** Starts the internal "New Account Pending Review" workflow; removed again once the account is reviewed. */
+export const PENDING_ACCOUNT_TAG = "booking-system-user-pending";
+
+/** Internal admin alerts while a request waits for review (removed once it's approved or denied). */
+export const REVIEW_ALERT_TAGS = {
+  booking: "room-booking-pending-review",
+  reschedule: "room-booking-reschedule-pending-review",
+} as const;
+
+/** Start the reschedule email workflows (contact booking fields hold the new/requested time first). */
+export const RESCHEDULE_TAGS = {
+  approved: "room-booking-reschedule-approved",
+  denied: "room-booking-reschedule-denied",
+} as const;
+
 export interface AppointmentRequest {
   calendarId: string;
   contactId: string;
@@ -37,10 +52,14 @@ export interface CalendarGateway {
   updateContact(contactId: string, update: { person?: GhlPerson; fields?: ContactFieldValues }): Promise<void>;
   /** Creates a confirmed appointment, which triggers the approval workflow. */
   createAppointment(request: AppointmentRequest): Promise<{ id: string }>;
+  /** Moves an existing appointment to a new time, keeping its id (approved reschedule). */
+  moveAppointment(appointmentId: string, request: { calendarId: string; assignedUserId: string; start: Date; end: Date; title: string }): Promise<void>;
   cancelAppointment(appointmentId: string): Promise<void>;
   deleteAppointment(appointmentId: string): Promise<void>;
   /** Adds a tag that triggers a workflow (removing it first if it may already be there). */
   addTriggerTag(contact: GhlContactRef, tag: string): Promise<void>;
+  /** Removes a tag (no-op when the contact is known not to have it). */
+  removeTag(contact: GhlContactRef, tag: string): Promise<void>;
 }
 
 export function createGhlGateway(): CalendarGateway {
@@ -54,9 +73,11 @@ export function createGhlGateway(): CalendarGateway {
     findOrCreateContact: async (person) => (await contacts()).findOrCreateContact(person),
     updateContact: async (contactId, update) => (await contacts()).updateContact(contactId, update),
     createAppointment: async (request) => (await calendars()).createAppointment(request),
+    moveAppointment: async (appointmentId, request) => (await calendars()).moveAppointment(appointmentId, request),
     cancelAppointment: async (appointmentId) => (await calendars()).cancelAppointment(appointmentId),
     deleteAppointment: async (appointmentId) => (await calendars()).deleteAppointment(appointmentId),
     addTriggerTag: async (contact, tag) => (await contacts()).addTriggerTag(contact, tag),
+    removeTag: async (contact, tag) => (await contacts()).removeTag(contact, tag),
   };
 }
 

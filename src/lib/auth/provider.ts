@@ -15,7 +15,7 @@ export interface SessionUser {
   accessReason: string | null;
 }
 
-export type AuthResult = { ok: true; message?: string; needsConfirmation?: boolean } | { ok: false; error: string };
+export type AuthResult = { ok: true; message?: string; needsConfirmation?: boolean; userId?: string } | { ok: false; error: string };
 
 export interface AuthProvider {
   getCurrentUser(): Promise<SessionUser | null>;

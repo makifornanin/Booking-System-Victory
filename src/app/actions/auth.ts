@@ -2,6 +2,7 @@
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { queuePendingReviewNotification } from "@/lib/accounts/pending-review";
 import { getAuthProvider } from "@/lib/auth/provider";
 import { ConfigError, getSiteUrl } from "@/lib/env";
 import { fieldErrorsFrom } from "@/lib/services/result";
@@ -63,6 +64,17 @@ export async function signUpAction(_prev: AuthFormState, formData: FormData): Pr
   const provider = await getAuthProvider();
   const result = await provider.signUp(parsed.data);
   if (!result.ok) return { error: result.error, email, fullName, phone };
+  // Tell the church office a new account is waiting (GHL workflow). Runs after the
+  // response and never affects registration.
+  if (result.userId) {
+    await queuePendingReviewNotification({
+      id: result.userId,
+      email: parsed.data.email,
+      fullName: parsed.data.fullName,
+      phone: parsed.data.phone,
+      ghlContactId: null,
+    }).catch((error: unknown) => console.error("[accounts] could not queue the pending-review notification:", error instanceof Error ? error.message : error));
+  }
   if (result.needsConfirmation) {
     return { message: "Check your email to confirm your account, then sign in.", email };
   }

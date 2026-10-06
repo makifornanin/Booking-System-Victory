@@ -25,13 +25,16 @@ export function calendarEventFor(booking: BookingDetails) {
 
 /**
  * Adds an approved booking to its owner's Google Calendar. Idempotent: if an
- * event id is already stored nothing happens, and the event id is derived from
- * the booking so Google itself rejects duplicates. Never throws.
+ * event id is already stored (and the last sync didn't fail) nothing happens,
+ * and the event id is derived from the booking so Google itself rejects
+ * duplicates. A stored event whose last sync failed (e.g. after a reschedule)
+ * is updated in place instead of duplicated. Never throws.
  */
 export async function syncApprovedBooking(booking: BookingDetails, deps: CalendarSyncDeps): Promise<CalendarSyncOutcome> {
   if (booking.status !== "approved") return "failed";
-  if (booking.googleCalendarEventId) return "already_synced";
+  if (booking.googleCalendarEventId && !booking.googleCalendarSyncError) return "already_synced";
   if (deps.google.mode === "disabled") return "disabled";
+  if (booking.googleCalendarEventId) return updateBookingEvent(booking, booking.googleCalendarEventId, deps);
 
   try {
     if (!(await deps.google.isConnected(booking.userId))) {
@@ -57,6 +60,31 @@ export const SYNC_MESSAGES: Record<CalendarSyncOutcome, string | null> = {
 };
 
 /** Retry action for admins (any approved booking) and members (their own). */
+async function updateBookingEvent(booking: BookingDetails, eventId: string, deps: CalendarSyncDeps): Promise<CalendarSyncOutcome> {
+  try {
+    const current = await deps.google.updateBookingEvent(booking.userId, eventId, calendarEventFor(booking));
+    await deps.repo.setCalendarSync(booking.id, current, null);
+    return "synced";
+  } catch (error) {
+    console.error(`[google] calendar update failed for booking ${booking.id}:`, error instanceof Error ? error.message : error);
+    // Keep the event id so a retry updates (not duplicates) the event.
+    await deps.repo.setCalendarSync(booking.id, eventId, "Google Calendar update failed.").catch(() => undefined);
+    return "failed";
+  }
+}
+
+/**
+ * After an approved reschedule: moves the existing Google event to the new
+ * time, or creates one if the booking never made it to Google. Never throws and
+ * never undoes the reschedule.
+ */
+export async function syncRescheduledBooking(booking: BookingDetails, deps: CalendarSyncDeps): Promise<CalendarSyncOutcome> {
+  if (booking.status !== "approved") return "failed";
+  if (deps.google.mode === "disabled") return "disabled";
+  if (!booking.googleCalendarEventId) return syncApprovedBooking({ ...booking, googleCalendarSyncError: null }, deps);
+  return updateBookingEvent(booking, booking.googleCalendarEventId, deps);
+}
+
 export async function retryCalendarSync(
   rawInput: unknown,
   actor: SessionUser | null,

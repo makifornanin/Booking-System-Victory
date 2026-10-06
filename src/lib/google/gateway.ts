@@ -15,6 +15,8 @@ export interface GoogleCalendarGateway {
   disconnect(userId: string): Promise<void>;
   /** Idempotent: returns the event id, creating the event only if it doesn't exist yet. */
   createBookingEvent(userId: string, event: CalendarEventInput): Promise<string>;
+  /** Moves the stored event to the booking's new time; returns the event id in use. */
+  updateBookingEvent(userId: string, eventId: string, event: CalendarEventInput): Promise<string>;
   /** Removes only the given event id. */
   deleteBookingEvent(userId: string, eventId: string): Promise<void>;
 }
@@ -85,6 +87,10 @@ function createLiveGoogleGateway(): GoogleCalendarGateway {
       const { api } = await deps();
       return api.insertEvent(await accessTokenFor(userId), event);
     },
+    async updateBookingEvent(userId, eventId, event) {
+      const { api } = await deps();
+      return api.updateEvent(await accessTokenFor(userId), eventId, event);
+    },
     async deleteBookingEvent(userId, eventId) {
       const { api } = await deps();
       await api.deleteEvent(await accessTokenFor(userId), eventId);
@@ -100,6 +106,9 @@ const disabledGoogleGateway: GoogleCalendarGateway = {
   saveConnection: async () => undefined,
   disconnect: async () => undefined,
   createBookingEvent: async () => {
+    throw new Error("Google Calendar sync is disabled in this environment.");
+  },
+  updateBookingEvent: async () => {
     throw new Error("Google Calendar sync is disabled in this environment.");
   },
   deleteBookingEvent: async () => undefined,

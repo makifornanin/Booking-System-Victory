@@ -91,6 +91,13 @@ export async function updateContact(contactId: string, update: { person?: GhlPer
   });
 }
 
+/** Removes a tag if the contact may have it (unknown tags are removed to be safe). */
+export async function removeTag(contact: GhlContactRef, tag: string): Promise<void> {
+  const mayHaveTag = contact.tags === null || contact.tags.some((existing) => existing.toLowerCase() === tag.toLowerCase());
+  if (!mayHaveTag) return;
+  await ghlRequest(`/contacts/${encodeURIComponent(contact.id)}/tags`, { method: "DELETE", version: GHL_API_VERSION.contacts, body: { tags: [tag] }, schema: tagsSchema });
+}
+
 /**
  * Adds a workflow trigger tag. If the contact might still have it from an earlier
  * run (or its tags are unknown), the tag is removed first so "Tag Added" fires again.

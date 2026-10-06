@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { RefreshCw } from "lucide-react";
 import { cancelBookingAction, retryCalendarSyncAction, retryStatusNotificationAction } from "@/app/actions/bookings";
+import { withdrawRescheduleAction } from "@/app/actions/reschedules";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 
@@ -102,5 +103,50 @@ export function RetryStatusNotificationButton({ bookingId }: { bookingId: string
       <RefreshCw className="size-3.5" aria-hidden />
       Retry WhatsApp notification
     </Button>
+  );
+}
+
+/** Member: withdraw a pending reschedule request (the booking itself is unchanged). */
+export function WithdrawRescheduleButton({ requestId, bookingId }: { requestId: string; bookingId: string }) {
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+  return (
+    <>
+      <Button variant="quiet" size="sm" onClick={() => setOpen(true)}>
+        Withdraw request
+      </Button>
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        locked={pending}
+        size="sm"
+        title="Withdraw this reschedule request?"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setOpen(false)} disabled={pending}>
+              Keep it
+            </Button>
+            <Button
+              variant="danger"
+              busy={pending}
+              busyLabel="Withdrawing…"
+              onClick={() =>
+                startTransition(async () => {
+                  const result = await withdrawRescheduleAction(requestId, bookingId);
+                  if (result.ok) {
+                    toast.success(result.message);
+                    setOpen(false);
+                  } else toast.error(result.error);
+                })
+              }
+            >
+              Withdraw request
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm leading-relaxed text-ink-soft">Your current booking stays exactly as it is, and the requested time is released for others.</p>
+      </Dialog>
+    </>
   );
 }

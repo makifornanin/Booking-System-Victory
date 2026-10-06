@@ -10,6 +10,9 @@ import type {
   BookingWithRoom,
   NewBooking,
   Profile,
+  RescheduleRequest,
+  RescheduleRequestDetails,
+  RescheduleStatus,
   Room,
   UserSummary,
 } from "@/lib/data/types";
@@ -49,8 +52,12 @@ export interface Repository {
   getRoomBySlug(slug: string): Promise<Room | null>;
   getRoomById(id: string): Promise<Room | null>;
 
-  /** Pending/approved periods for a room, without requester details. */
-  getBusyRanges(roomId: string, from: Date, to: Date): Promise<TimeRange[]>;
+  /**
+   * Periods a room is taken, without requester details: pending and approved
+   * bookings plus slots held by pending reschedule requests. `excludeRescheduleId`
+   * leaves out one request's own hold (used when approving it).
+   */
+  getBusyRanges(roomId: string, from: Date, to: Date, options?: { excludeRescheduleId?: string }): Promise<TimeRange[]>;
   /** Admin-only: other blocking bookings that overlap the given window. */
   findConflictingBookings(roomId: string, range: TimeRange, excludeBookingId?: string): Promise<Booking[]>;
 
@@ -75,6 +82,25 @@ export interface Repository {
   /** Admin cancels an approved booking (after GHL was cancelled). */
   cancelApprovedBooking(id: string): Promise<Booking | null>;
   setCalendarSync(bookingId: string, eventId: string | null, error: string | null): Promise<void>;
+
+  /** Member: holds the requested slot. Throws conflict/duplicate/invalid/forbidden RepositoryErrors. */
+  insertRescheduleRequest(input: { bookingId: string; requestedStart: string; requestedEnd: string }): Promise<RescheduleRequest>;
+  getRescheduleRequest(id: string): Promise<RescheduleRequestDetails | null>;
+  /** Newest first. */
+  listRescheduleRequestsForBooking(bookingId: string): Promise<RescheduleRequest[]>;
+  /** The member's own requests, newest first. */
+  listRescheduleRequestsForUser(userId: string): Promise<RescheduleRequest[]>;
+  /** Admin-only. */
+  listRescheduleRequestsByStatus(status: RescheduleStatus, limit?: number): Promise<RescheduleRequestDetails[]>;
+  countRescheduleRequestsByStatus(): Promise<Record<RescheduleStatus, number>>;
+  claimRescheduleForReview(id: string, adminId: string, now: Date, staleBefore: Date): Promise<RescheduleRequest | null>;
+  releaseRescheduleClaim(id: string, adminId: string): Promise<void>;
+  /** Moves the booking to the requested time and marks the request approved, atomically. Null if not claimable. */
+  applyReschedule(id: string): Promise<Booking | null>;
+  markRescheduleDenied(id: string, adminId: string, reason: string, now: Date): Promise<RescheduleRequest | null>;
+  /** Member withdraws their own pending request. */
+  cancelOwnReschedule(id: string): Promise<RescheduleRequest | null>;
+  setRescheduleNotificationResult(id: string, error: string | null): Promise<void>;
 
   listLiveAnnouncements(): Promise<Announcement[]>;
   listAllAnnouncements(): Promise<Announcement[]>;

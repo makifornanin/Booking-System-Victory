@@ -84,6 +84,18 @@ export function createDemoCalendarGateway(): CalendarGateway {
       return { id };
     },
 
+    async moveAppointment(appointmentId, request) {
+      if (request.title.toLowerCase().includes(DEMO_GHL_FAILURE_MARKER)) {
+        throw new GhlError("unavailable", "Simulated GHL outage (demo).");
+      }
+      const appointment = state.appointments.get(appointmentId);
+      if (!appointment) throw new GhlError("not_found", "Appointment not found (demo).");
+      appointment.range = { start: request.start.getTime(), end: request.end.getTime() };
+      appointment.calendarId = request.calendarId;
+      appointment.assignedUserId = request.assignedUserId;
+      appointment.status = "confirmed";
+    },
+
     async cancelAppointment(appointmentId) {
       const appointment = state.appointments.get(appointmentId);
       if (appointment) appointment.status = "cancelled";
@@ -97,6 +109,11 @@ export function createDemoCalendarGateway(): CalendarGateway {
       const contact = contactById(ref.id);
       if (!contact) throw new GhlError("not_found", "Contact not found (demo).");
       contact.tags = [...contact.tags.filter((existing) => existing !== tag), tag];
+    },
+
+    async removeTag(ref, tag) {
+      const contact = contactById(ref.id);
+      if (contact) contact.tags = contact.tags.filter((existing) => existing !== tag);
     },
   };
 }

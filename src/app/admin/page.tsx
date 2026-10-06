@@ -39,15 +39,32 @@ export default async function AdminOverviewPage() {
   const { start: dayStart, end: dayEnd } = zonedDayRange(today);
   const weekEnd = zonedDayRange(addDaysToKey(today, 7)).start;
 
-  const [bookingCounts, userCounts, pending, pendingUsers, todays, upcoming, rooms] = await Promise.all([
+  const [bookingCounts, userCounts, pendingBookings, pendingReschedules, pendingUsers, todays, upcoming, rooms] = await Promise.all([
     getBookingCounts(),
     getUserCounts(),
     repo.listBookingsByStatus("pending", 6),
+    repo.listRescheduleRequestsByStatus("pending", 6),
     repo.listUsers("pending"),
     repo.listBookingsBetween(dayStart, dayEnd, ["pending", "approved"]),
     repo.listBookingsBetween(now, weekEnd, ["approved"]),
     getActiveRooms(),
   ]);
+
+  const pending = [
+    ...pendingBookings.map((b) => ({ id: b.id, href: `/admin/bookings/${b.id}`, eventName: b.eventName, requester: b.requester.fullName, room: b.room.name, start: b.startTime, end: b.endTime, reschedule: false })),
+    ...pendingReschedules.map((r) => ({
+      id: r.id,
+      href: `/admin/bookings/reschedule/${r.id}`,
+      eventName: r.booking.eventName,
+      requester: r.booking.requester.fullName,
+      room: r.booking.room.name,
+      start: r.requestedStart,
+      end: r.requestedEnd,
+      reschedule: true,
+    })),
+  ]
+    .sort((a, b) => a.start.localeCompare(b.start))
+    .slice(0, 6);
 
   return (
     <div className="space-y-12">
@@ -57,19 +74,20 @@ export default async function AdminOverviewPage() {
         <Panel title="Booking requests" count={bookingCounts.pending} href="/admin/bookings">
           {pending.length > 0 ? (
             <ul className="divide-y divide-line">
-              {pending.map((booking) => (
-                <li key={booking.id} className="relative flex items-center justify-between gap-4 py-3">
+              {pending.map((item) => (
+                <li key={item.id} className="relative flex items-center justify-between gap-4 py-3">
                   <div className="min-w-0">
-                    <Link href={`/admin/bookings/${booking.id}`} className="block truncate text-sm font-bold after:absolute after:inset-0 hover:text-brand">
-                      {booking.eventName}
+                    <Link href={item.href} className="block truncate text-sm font-bold after:absolute after:inset-0 hover:text-brand">
+                      {item.eventName}
                     </Link>
                     <p className="truncate text-[13px] text-muted">
-                      {booking.requester.fullName} · {booking.room.name}
+                      {item.reschedule && <span className="font-semibold text-accent-ink">Reschedule · </span>}
+                      {item.requester} · {item.room}
                     </p>
                   </div>
                   <p className="shrink-0 text-right text-[13px] font-semibold tabular-nums text-ink-soft">
-                    {formatDate(booking.startTime, "EEE d MMM")}
-                    <span className="block font-normal text-muted">{formatTimeRange(booking.startTime, booking.endTime)}</span>
+                    {formatDate(item.start, "EEE d MMM")}
+                    <span className="block font-normal text-muted">{formatTimeRange(item.start, item.end)}</span>
                   </p>
                 </li>
               ))}

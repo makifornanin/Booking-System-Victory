@@ -102,7 +102,7 @@ export function createNeonAuthProvider(): AuthProvider {
         await syncProfile({ id: data.user.id, email, name: fullName }, phone);
       }
       // With email verification enabled in Neon Auth, sign-up returns no session token.
-      return { ok: true, needsConfirmation: !data?.token };
+      return { ok: true, needsConfirmation: !data?.token, userId: data?.user?.id };
     },
 
     async signOut() {

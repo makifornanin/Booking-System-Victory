@@ -3,11 +3,12 @@ import { getDataMode, getSiteUrl } from "@/lib/env";
 import { getCalendarGateway } from "@/lib/ghl/gateway";
 import { getGoogleCalendar } from "@/lib/google/gateway";
 import type { BotDeps, BotProfile } from "@/lib/bot/tools";
+import { getReviewAlerts } from "@/lib/services/deps";
 
 /** Real dependencies for the bot tools: the same repositories and gateways the website uses. */
 export async function getBotDeps(): Promise<BotDeps> {
   const [calendar, google] = await Promise.all([getCalendarGateway(), getGoogleCalendar()]);
-  const base = { calendar, google, now: () => new Date(), siteUrl: getSiteUrl() ?? "http://localhost:3000" };
+  const base = { calendar, google, now: () => new Date(), siteUrl: getSiteUrl() ?? "http://localhost:3000", reviewAlerts: getReviewAlerts(calendar) };
 
   if (getDataMode() === "demo") {
     const [{ createDemoRepository }, { getDemoState }] = await Promise.all([import("@/lib/demo/repository"), import("@/lib/demo/store")]);

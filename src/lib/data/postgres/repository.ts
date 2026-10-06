@@ -1,7 +1,7 @@
 import "server-only";
 import { asMember } from "@/lib/db/client";
 import { PENDING_LIMIT_MESSAGE, RepositoryError, type Repository } from "@/lib/data/repository";
-import type { AccessStatus, AnnouncementInput } from "@/lib/data/types";
+import type { AccessStatus, AnnouncementInput, RescheduleRequestDetails, RescheduleStatus } from "@/lib/data/types";
 import type { BookingStatus } from "@/lib/domain/booking-rules";
 import {
   BOOKING_DETAILS_SELECT,
@@ -12,6 +12,7 @@ import {
   toBookingDetails,
   toBookingWithRoom,
   toProfile,
+  toRescheduleRequest,
   toRoom,
   toUserSummary,
   type AccessEventRow,
@@ -20,6 +21,7 @@ import {
   type BookingRow,
   type BookingWithRoomRow,
   type ProfileRow,
+  type RescheduleRow,
   type RoomRow,
 } from "@/lib/data/postgres/rows";
 
@@ -33,6 +35,9 @@ const DB_MESSAGES: Record<string, string> = {
   "Bookings use 30-minute steps": "Bookings use 30-minute steps.",
   "You have too many pending requests": PENDING_LIMIT_MESSAGE,
   "Admins cannot change their own access": "You can't change your own access.",
+  "Only approved bookings can be rescheduled": "Only approved bookings can be rescheduled.",
+  "Past bookings cannot be rescheduled": "Past bookings can't be rescheduled.",
+  "The booking changed after this request was made": "The booking changed after this request was made, so it can't be applied. Deny it and ask the member to request again.",
 };
 
 function toRepositoryError(error: unknown, context: string): RepositoryError {
@@ -67,6 +72,7 @@ const ANNOUNCEMENT_COLUMNS: Record<keyof AnnouncementInput, string> = {
 
 const ACCESS_STATUSES: AccessStatus[] = ["pending", "active", "denied", "revoked"];
 const BOOKING_STATUSES: BookingStatus[] = ["pending", "approved", "denied", "cancelled"];
+const RESCHEDULE_STATUSES: RescheduleStatus[] = ["pending", "approved", "denied", "cancelled"];
 
 /**
  * Repository backed by Neon Postgres. Every call runs as `app_member` for the
@@ -152,11 +158,11 @@ export function createPostgresRepository(actorId: string | null): Repository {
       return row ? toRoom(row) : null;
     },
 
-    async getBusyRanges(roomId, from, to) {
+    async getBusyRanges(roomId, from, to, options) {
       const rows = await query<{ start_time: Date; end_time: Date }>(
         "getBusyRanges",
-        "select * from public.get_room_busy_ranges($1, $2, $3)",
-        [roomId, from, to],
+        "select * from public.get_room_busy_ranges($1, $2, $3, $4)",
+        [roomId, from, to, options?.excludeRescheduleId ?? null],
       );
       return rows.map((row) => ({ start: new Date(row.start_time).getTime(), end: new Date(row.end_time).getTime() }));
     },
@@ -307,6 +313,124 @@ export function createPostgresRepository(actorId: string | null): Repository {
 
     async setCalendarSync(bookingId, eventId, error) {
       await query("setCalendarSync", "select public.set_booking_calendar_sync($1, $2, $3)", [bookingId, eventId, error]);
+    },
+
+    async insertRescheduleRequest(input) {
+      const row = await first<RescheduleRow>(
+        "insertRescheduleRequest",
+        "insert into public.booking_reschedule_requests (booking_id, requested_start, requested_end) values ($1, $2, $3) returning *",
+        [input.bookingId, input.requestedStart, input.requestedEnd],
+      );
+      return toRescheduleRequest(row!);
+    },
+
+    async getRescheduleRequest(id) {
+      const row = await first<RescheduleRow>(
+        "getRescheduleRequest",
+        `select r.*, rv.full_name as reviewer_name from public.booking_reschedule_requests r
+         left join public.profiles rv on rv.id = r.reviewed_by where r.id = $1`,
+        [id],
+      );
+      if (!row) return null;
+      const booking = await repo.getBookingDetails(row.booking_id);
+      if (!booking) return null;
+      return { ...toRescheduleRequest(row), booking, reviewer: row.reviewed_by ? { id: row.reviewed_by, fullName: row.reviewer_name ?? "" } : null };
+    },
+
+    async listRescheduleRequestsForBooking(bookingId) {
+      const rows = await query<RescheduleRow>(
+        "listRescheduleRequestsForBooking",
+        "select * from public.booking_reschedule_requests where booking_id = $1 order by created_at desc limit 50",
+        [bookingId],
+      );
+      return rows.map(toRescheduleRequest);
+    },
+
+    async listRescheduleRequestsForUser(userId) {
+      const rows = await query<RescheduleRow>(
+        "listRescheduleRequestsForUser",
+        "select * from public.booking_reschedule_requests where requested_by = $1 order by created_at desc limit 200",
+        [userId],
+      );
+      return rows.map(toRescheduleRequest);
+    },
+
+    async listRescheduleRequestsByStatus(status, limit = 100) {
+      const order = status === "pending" ? "r.requested_start asc" : "r.reviewed_at desc nulls last, r.created_at desc";
+      const rows = await query<RescheduleRow>(
+        "listRescheduleRequestsByStatus",
+        `select r.*, rv.full_name as reviewer_name from public.booking_reschedule_requests r
+         left join public.profiles rv on rv.id = r.reviewed_by
+         where r.status = $1 order by ${order} limit $2`,
+        [status, limit],
+      );
+      if (rows.length === 0) return [];
+      const bookings = await query<BookingDetailsRow>("listRescheduleBookings", `${BOOKING_DETAILS_SELECT} where b.id = any($1::uuid[])`, [
+        [...new Set(rows.map((row) => row.booking_id))],
+      ]);
+      const byId = new Map(bookings.map((row) => [row.id, toBookingDetails(row)]));
+      return rows.flatMap((row): RescheduleRequestDetails[] => {
+        const booking = byId.get(row.booking_id);
+        return booking
+          ? [{ ...toRescheduleRequest(row), booking, reviewer: row.reviewed_by ? { id: row.reviewed_by, fullName: row.reviewer_name ?? "" } : null }]
+          : [];
+      });
+    },
+
+    async countRescheduleRequestsByStatus() {
+      const rows = await query<{ status: RescheduleStatus; n: number }>(
+        "countRescheduleRequestsByStatus",
+        "select status, count(*)::int as n from public.booking_reschedule_requests group by status",
+      );
+      const counts = Object.fromEntries(RESCHEDULE_STATUSES.map((s) => [s, 0])) as Record<RescheduleStatus, number>;
+      for (const row of rows) counts[row.status] = row.n;
+      return counts;
+    },
+
+    async claimRescheduleForReview(id, adminId, now, staleBefore) {
+      const row = await first<RescheduleRow>(
+        "claimRescheduleForReview",
+        `update public.booking_reschedule_requests set review_locked_at = $2, review_locked_by = $3
+         where id = $1 and status = 'pending' and (review_locked_at is null or review_locked_at < $4)
+         returning *`,
+        [id, now, adminId, staleBefore],
+      );
+      return row ? toRescheduleRequest(row) : null;
+    },
+
+    async releaseRescheduleClaim(id, adminId) {
+      await query(
+        "releaseRescheduleClaim",
+        "update public.booking_reschedule_requests set review_locked_at = null, review_locked_by = null where id = $1 and review_locked_by = $2",
+        [id, adminId],
+      );
+    },
+
+    async applyReschedule(id) {
+      const row = await first<BookingRow>("applyReschedule", "select * from public.admin_apply_reschedule($1)", [id]);
+      return row ? toBooking(row) : null;
+    },
+
+    async markRescheduleDenied(id, adminId, reason, now) {
+      const row = await first<RescheduleRow>(
+        "markRescheduleDenied",
+        `update public.booking_reschedule_requests
+         set status = 'denied', denial_reason = $3, reviewed_by = $2, reviewed_at = $4,
+             review_locked_at = null, review_locked_by = null
+         where id = $1 and status = 'pending' and review_locked_by = $2
+         returning *`,
+        [id, adminId, reason, now],
+      );
+      return row ? toRescheduleRequest(row) : null;
+    },
+
+    async cancelOwnReschedule(id) {
+      const row = await first<RescheduleRow>("cancelOwnReschedule", "select * from public.cancel_my_reschedule($1)", [id]);
+      return row ? toRescheduleRequest(row) : null;
+    },
+
+    async setRescheduleNotificationResult(id, error) {
+      await query("setRescheduleNotificationResult", "update public.booking_reschedule_requests set notification_error = $2 where id = $1", [id, error]);
     },
 
     async listLiveAnnouncements() {

@@ -147,6 +147,30 @@ export async function insertEvent(accessToken: string, input: CalendarEventInput
   throw new GoogleCalendarError(response.status >= 500 ? "unavailable" : "rejected", "Google Calendar rejected the event.", response.status);
 }
 
+/**
+ * Moves an existing event to the booking's (new) time and details, keeping its id.
+ * If the member deleted it in Google Calendar, a new event is created instead
+ * (Google never reuses a deleted event id). Returns the event id now in use.
+ */
+export async function updateEvent(accessToken: string, eventId: string, input: CalendarEventInput): Promise<string> {
+  const { id: _ignored, ...body } = buildEventBody(input);
+  void _ignored;
+  const response = await calendarRequest(accessToken, `/${encodeURIComponent(eventId)}`, { method: "PATCH", body: JSON.stringify(body) });
+  if (response.ok) return eventId;
+  if (response.status === 404 || response.status === 410) {
+    const created = await calendarRequest(accessToken, "", { method: "POST", body: JSON.stringify(body) });
+    if (created.ok) {
+      const json = (await created.json().catch(() => null)) as { id?: string } | null;
+      if (json?.id) return json.id;
+    }
+    console.error(`[google] re-create event failed: HTTP ${created.status}`);
+    throw new GoogleCalendarError(created.status >= 500 ? "unavailable" : "rejected", "Google Calendar rejected the event.", created.status);
+  }
+  console.error(`[google] update event failed: HTTP ${response.status}`);
+  if (response.status === 401) throw new GoogleCalendarError("revoked", "Google access was revoked.", 401);
+  throw new GoogleCalendarError(response.status >= 500 ? "unavailable" : "rejected", "Google Calendar rejected the change.", response.status);
+}
+
 /** Deletes only the given event. Already-deleted events count as success. */
 export async function deleteEvent(accessToken: string, eventId: string): Promise<void> {
   const response = await calendarRequest(accessToken, `/${encodeURIComponent(eventId)}`, { method: "DELETE" });

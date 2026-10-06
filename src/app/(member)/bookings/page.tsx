@@ -3,8 +3,9 @@ import Link from "next/link";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth/session";
 import { getRepositoryForRequest } from "@/lib/data/queries";
-import type { BookingWithRoom } from "@/lib/data/types";
+import type { BookingWithRoom, RescheduleRequest } from "@/lib/data/types";
 import { formatDate } from "@/lib/domain/time";
+import { RESCHEDULE_SUBMITTED_MESSAGE } from "@/lib/services/reschedules";
 import { firstParam, parseUuid } from "@/lib/validation/params";
 import { BookingRow } from "@/components/bookings/booking-row";
 import { buttonStyles } from "@/components/ui/button";
@@ -57,9 +58,13 @@ export default async function MyBookingsPage({ searchParams }: PageProps<"/booki
   const query = await searchParams;
   const view = viewSchema.parse(firstParam(query.view));
   const highlightId = parseUuid(firstParam(query.new));
+  const rescheduledId = parseUuid(firstParam(query.rescheduled));
 
   const now = new Date();
-  const all = await (await getRepositoryForRequest()).listBookingsForUser(user.id);
+  const repo = await getRepositoryForRequest();
+  const [all, requests] = await Promise.all([repo.listBookingsForUser(user.id), repo.listRescheduleRequestsForUser(user.id)]);
+  const requestsByBooking = new Map<string, RescheduleRequest[]>();
+  for (const request of requests) requestsByBooking.set(request.bookingId, [...(requestsByBooking.get(request.bookingId) ?? []), request]);
   const counts = Object.fromEntries(views.map((v) => [v, filterBookings(all, v, now).length])) as Record<View, number>;
   const list = filterBookings(all, view, now);
   const empty = emptyCopy[view];
@@ -83,6 +88,12 @@ export default async function MyBookingsPage({ searchParams }: PageProps<"/booki
         </Notice>
       )}
 
+      {rescheduledId && requests.some((r) => r.bookingId === rescheduledId && r.status === "pending") && (
+        <Notice tone="success" title="Reschedule request sent" className="mb-8">
+          {RESCHEDULE_SUBMITTED_MESSAGE}
+        </Notice>
+      )}
+
       <LinkTabs
         label="Filter bookings"
         tabs={views.map((v) => ({ href: v === "upcoming" ? "/bookings" : `/bookings?view=${v}`, label: labels[v], count: counts[v], active: v === view }))}
@@ -95,7 +106,7 @@ export default async function MyBookingsPage({ searchParams }: PageProps<"/booki
               <h2 className="eyebrow border-b border-line pb-3 text-muted">{month}</h2>
               <ol className="divide-y divide-line">
                 {bookings.map((booking) => (
-                  <BookingRow key={booking.id} booking={booking} now={now} highlight={booking.id === highlightId} />
+                  <BookingRow key={booking.id} booking={booking} now={now} highlight={booking.id === highlightId} reschedules={requestsByBooking.get(booking.id)} />
                 ))}
               </ol>
             </section>

@@ -27,7 +27,13 @@ export default async function AdminBookingPage({ params }: PageProps<"/admin/boo
   if (!booking) notFound();
 
   const { start, end } = zonedDayRange(dateKeyInZone(booking.startTime));
-  const [room, sameDay] = await Promise.all([repo.getRoomById(booking.roomId), repo.listBookingsBetween(start, end, ["pending", "approved"])]);
+  const [room, sameDay, reschedules] = await Promise.all([
+    repo.getRoomById(booking.roomId),
+    repo.listBookingsBetween(start, end, ["pending", "approved"]),
+    repo.listRescheduleRequestsForBooking(booking.id),
+  ]);
+  const pendingReschedule = reschedules.find((r) => r.status === "pending");
+  const slot = (from: string, to: string) => `${formatDate(from, "EEE d MMM")} · ${formatTimeRange(from, to)}`;
   const roomDay = sameDay.filter((b) => b.roomId === booking.roomId);
   const isPending = booking.status === "pending";
   const isUpcoming = new Date(booking.startTime) > new Date();
@@ -84,7 +90,20 @@ export default async function AdminBookingPage({ params }: PageProps<"/admin/boo
         </Notice>
       )}
       {isPending && overCapacity && <Notice tone="warning">This request is for more people than the room holds ({room.capacity}).</Notice>}
-      {booking.status === "approved" && !booking.googleCalendarEventId && booking.googleCalendarSyncError && (
+      {pendingReschedule && (
+        <Notice
+          tone="info"
+          title="Reschedule requested"
+          action={
+            <Link href={`/admin/bookings/reschedule/${pendingReschedule.id}`} className="text-sm font-bold underline">
+              Review
+            </Link>
+          }
+        >
+          The member asked to move this booking to {slot(pendingReschedule.requestedStart, pendingReschedule.requestedEnd)}. It stays as shown until you approve.
+        </Notice>
+      )}
+      {booking.status === "approved" && booking.googleCalendarSyncError && (
         <Notice tone="warning" title="Booking approved, but Google Calendar sync failed." action={<RetryCalendarSyncButton bookingId={booking.id} />}>
           {booking.googleCalendarSyncError}
         </Notice>
@@ -94,7 +113,7 @@ export default async function AdminBookingPage({ params }: PageProps<"/admin/boo
           {booking.statusNotificationError}. The {booking.status === "approved" ? "approval" : booking.status === "denied" ? "denial" : "cancellation"} itself is saved.
         </Notice>
       )}
-      {booking.status === "approved" && booking.googleCalendarEventId && (
+      {booking.status === "approved" && booking.googleCalendarEventId && !booking.googleCalendarSyncError && (
         <p className="flex items-center gap-1.5 text-sm font-semibold text-approved">
           <CalendarCheck2 className="size-4" aria-hidden />
           On the member&apos;s Google Calendar
@@ -107,6 +126,23 @@ export default async function AdminBookingPage({ params }: PageProps<"/admin/boo
             Request
           </h2>
           <SummaryList items={details} />
+          {reschedules.length > 0 && (
+            <div className="mt-8">
+              <h3 className="mb-2 text-[13px] font-extrabold">Reschedule history</h3>
+              <ul className="divide-y divide-line border-y border-line text-[13px]">
+                {reschedules.map((r) => (
+                  <li key={r.id} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 py-2.5">
+                    <Link href={`/admin/bookings/reschedule/${r.id}`} className="font-semibold hover:text-brand">
+                      {slot(r.originalStart, r.originalEnd)} → {slot(r.requestedStart, r.requestedEnd)}
+                    </Link>
+                    <span className="text-muted">
+                      {r.status === "pending" ? "Pending review" : r.status === "approved" ? "Approved" : r.status === "denied" ? "Denied" : "Withdrawn"} · {formatDate(r.createdAt, "d MMM")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </section>
 
         <div className="space-y-10 lg:col-span-5">

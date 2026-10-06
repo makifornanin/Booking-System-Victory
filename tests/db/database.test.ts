@@ -318,3 +318,78 @@ describe("WhatsApp bookings (bot API)", () => {
     });
   });
 });
+
+describe("reschedule requests", () => {
+  const day2 = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+  const at2 = (hhmm: string) => `${day2}T${hhmm}:00+08:00`;
+  let booking: string;
+
+  const book = (userId: string, from: string, to: string) =>
+    rows<{ id: string }>(`insert into public.bookings (user_id, room_id, event_name, event_type, purpose, attendee_count, start_time, end_time)
+      values ('${userId}', '${roomA}', 'Rehearsal', 'other', 'Test', 4, '${at2(from)}', '${at2(to)}') returning id`);
+  const requestFor = (bookingId: string, from: string, to: string) =>
+    `insert into public.booking_reschedule_requests (booking_id, requested_start, requested_end) values ('${bookingId}', '${at2(from)}', '${at2(to)}') returning id, room_id, original_start, status`;
+
+  beforeAll(async () => {
+    booking = (await as(ALICE, () => book(ALICE, "08:00", "09:00")))[0].id;
+    await as(ADMIN, () => db.query(`update public.bookings set status = 'approved', reviewed_by = '${ADMIN}', reviewed_at = now() where id = '${booking}'`));
+  });
+
+  it("lets only the owner request a reschedule of a future approved booking, once at a time", async () => {
+    await as(BOB, async () => expect(await errorCode(requestFor(booking, "14:00", "15:00"))).toBe("42501"));
+    const pendingBooking = (await as(ALICE, () => book(ALICE, "20:00", "21:00")))[0].id;
+    await as(ALICE, async () => {
+      expect(await errorCode(requestFor(pendingBooking, "14:00", "15:00"))).toBe("23514");
+      const created = await rows<{ room_id: string; original_start: Date; status: string }>(requestFor(booking, "14:00", "15:00"));
+      expect(created[0]).toMatchObject({ room_id: roomA, status: "pending" });
+      expect(new Date(created[0].original_start).toISOString()).toBe(new Date(at2("08:00")).toISOString());
+      expect(await errorCode(requestFor(booking, "16:00", "17:00"))).toBe("23505"); // one pending per booking
+      expect(await errorCode(`insert into public.booking_reschedule_requests (booking_id, requested_start, requested_end, status) values ('${booking}', '${at2("16:00")}', '${at2("17:00")}', 'approved')`)).toBe("42501");
+    });
+  });
+
+  it("holds the requested slot against new bookings and other requests, and shows it as busy", async () => {
+    await as(BOB, async () => {
+      expect(await errorCode(`insert into public.bookings (user_id, room_id, event_name, event_type, purpose, attendee_count, start_time, end_time)
+        values ('${BOB}', '${roomA}', 'Clash', 'other', 'Test', 4, '${at2("14:30")}', '${at2("15:30")}')`)).toBe("23P01");
+      const busy = await rows<{ start_time: Date }>(`select * from public.get_room_busy_ranges('${roomA}', '${at2("00:00")}', '${at2("23:59")}')`);
+      expect(busy.map((b) => new Date(b.start_time).toISOString())).toEqual(expect.arrayContaining([new Date(at2("08:00")).toISOString(), new Date(at2("14:00")).toISOString()]));
+    });
+    const bobBooking = (await as(BOB, () => book(BOB, "11:00", "12:00")))[0].id;
+    await as(ADMIN, () => db.query(`update public.bookings set status = 'approved', reviewed_by = '${ADMIN}', reviewed_at = now() where id = '${bobBooking}'`));
+    await as(BOB, async () => expect(await errorCode(requestFor(bobBooking, "14:30", "15:30"))).toBe("23P01"));
+  });
+
+  it("approval goes only through admin_apply_reschedule, which moves the same booking and frees the old slot", async () => {
+    const request = (await rows<{ id: string }>(`select id from public.booking_reschedule_requests where booking_id = '${booking}' and status = 'pending'`))[0].id;
+    await as(ALICE, async () => {
+      await db.query(`update public.booking_reschedule_requests set status = 'approved' where id = '${request}'`); // RLS: no effect
+      expect(await errorCode(`select * from public.admin_apply_reschedule('${request}')`)).toBe("42501");
+    });
+    await as(ADMIN, async () => {
+      expect(await errorCode(`update public.booking_reschedule_requests set status = 'approved', reviewed_at = now() where id = '${request}'`)).toBe("42501");
+      expect(await rows(`select * from public.admin_apply_reschedule('${request}')`)).toHaveLength(0); // not claimed yet
+      await db.query(`update public.booking_reschedule_requests set review_locked_at = now(), review_locked_by = '${ADMIN}' where id = '${request}'`);
+      const moved = await rows<{ id: string; status: string; start_time: Date }>(`select * from public.admin_apply_reschedule('${request}')`);
+      expect(moved[0]).toMatchObject({ id: booking, status: "approved" });
+      expect(new Date(moved[0].start_time).toISOString()).toBe(new Date(at2("14:00")).toISOString());
+    });
+    const status = (await rows<{ status: string; reviewed_by: string }>(`select status, reviewed_by from public.booking_reschedule_requests where id = '${request}'`))[0];
+    expect(status).toEqual({ status: "approved", reviewed_by: ADMIN });
+    // The original 08:00 slot is free again.
+    expect(await as(BOB, () => book(BOB, "08:00", "09:00"))).toHaveLength(1);
+  });
+
+  it("keeps the original booking on denial and releases holds when a booking is cancelled", async () => {
+    const r1 = (await as(ALICE, () => rows<{ id: string }>(requestFor(booking, "17:00", "18:00"))))[0].id;
+    await as(ADMIN, () => db.query(`update public.booking_reschedule_requests set status = 'denied', denial_reason = 'Busy', reviewed_by = '${ADMIN}', reviewed_at = now() where id = '${r1}'`));
+    const after = (await rows<{ status: string; start_time: Date }>(`select status, start_time from public.bookings where id = '${booking}'`))[0];
+    expect(after.status).toBe("approved");
+    expect(new Date(after.start_time).toISOString()).toBe(new Date(at2("14:00")).toISOString());
+    expect(await as(BOB, () => book(BOB, "17:00", "18:00"))).toHaveLength(1); // released
+
+    const r2 = (await as(ALICE, () => rows<{ id: string }>(requestFor(booking, "19:00", "20:00"))))[0].id;
+    await as(ALICE, () => db.query(`select * from public.cancel_my_booking('${booking}')`));
+    expect((await rows<{ status: string }>(`select status from public.booking_reschedule_requests where id = '${r2}'`))[0].status).toBe("cancelled");
+  });
+});

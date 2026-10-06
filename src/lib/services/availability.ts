@@ -35,13 +35,14 @@ export function bookableDateRange(now: Date): { first: string; last: string } {
 
 /**
  * Final availability for one room/day: GHL free slots minus local pending and
- * approved bookings. Used for display and re-run on every submission.
+ * approved bookings and slots held by pending reschedule requests. Used for
+ * display and re-run on every submission and approval.
  */
 export async function getRoomDayAvailability(
   room: Pick<Room, "id" | "slug" | "ghlCalendarId">,
   dateKey: string,
   deps: AvailabilityDeps,
-  options: { forDisplay?: boolean } = {},
+  options: { forDisplay?: boolean; excludeRescheduleId?: string } = {},
 ): Promise<RoomDayAvailability> {
   const now = deps.now();
   const { first, last } = bookableDateRange(now);
@@ -70,7 +71,7 @@ export async function getRoomDayAvailability(
 
   // Local bookings, GHL free slots and the calendar's slot size are fetched in parallel.
   const [busy, free] = await Promise.all([
-    deps.repo.getBusyRanges(room.id, start, end),
+    deps.repo.getBusyRanges(room.id, start, end, options.excludeRescheduleId ? { excludeRescheduleId: options.excludeRescheduleId } : undefined),
     calendarId
       ? Promise.all([
           deps.calendar.getFreeSlotStarts(calendarId, start, end, options.forDisplay ? { maxAgeMs: 30_000 } : undefined),

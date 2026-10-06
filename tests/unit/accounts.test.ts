@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Repository } from "@/lib/data/repository";
 import { createDemoRepository } from "@/lib/demo/repository";
 import { normalizePhone, formatPhone } from "@/lib/domain/phone";
-import { changeAccess, retryAccessNotification } from "@/lib/services/accounts";
+import { PENDING_ACCOUNT_TAG } from "@/lib/ghl/gateway";
+import { changeAccess, notifyPendingAccount, retryAccessNotification } from "@/lib/services/accounts";
 import { signUpSchema } from "@/lib/validation/auth";
 import { admin, fakeGhl, member, pendingUserId } from "./fakes";
 
@@ -105,5 +106,53 @@ describe("account access", () => {
     expect(await retryAccessNotification({ userId: pendingUserId }, admin, { repo: adminRepo, calendar: working.gateway })).toMatchObject({ ok: true });
     expect(working.log.tags).toEqual([{ contactId: "contact-1", tag: "booking-system-user-approved" }]);
     expect((await adminRepo.getProfile(pendingUserId))?.accessNotificationError).toBeNull();
+  });
+});
+
+describe("new account pending review (GHL)", () => {
+  const owner = { id: pendingUserId, email: "lia@victory.test", fullName: "Lia Mendoza", phone: "+639170000004", ghlContactId: null };
+
+  it("finds or creates the contact with name, email and phone, then re-adds booking-system-user-pending", async () => {
+    const ghl = fakeGhl();
+    const saved: string[] = [];
+    const error = await notifyPendingAccount(owner, { calendar: ghl.gateway, saveGhlContactId: async (_id, contactId) => void saved.push(contactId) });
+    expect(error).toBeNull();
+    expect(ghl.log.searches).toBe(1);
+    expect(ghl.log.updates[0]).toMatchObject({ person: { email: "lia@victory.test", fullName: "Lia Mendoza", phone: "+639170000004" } });
+    expect(ghl.log.tags).toEqual([{ contactId: "contact-1", tag: PENDING_ACCOUNT_TAG }]);
+    expect(saved).toEqual(["contact-1"]);
+    expect(ghl.log.tags.some((t) => /approved|denied|revoked|restored/.test(t.tag))).toBe(false);
+  });
+
+  it("returns an error instead of throwing when GHL is down (registration is unaffected)", async () => {
+    const ghl = fakeGhl({ failContactUpdate: true });
+    await expect(notifyPendingAccount(owner, { calendar: ghl.gateway, saveGhlContactId: async () => undefined })).resolves.toEqual(expect.any(String));
+    expect((await adminRepo.getProfile(pendingUserId))?.accessStatus).toBe("pending");
+  });
+
+  it("approving or denying removes the pending tag before adding the lifecycle tag", async () => {
+    const approveGhl = fakeGhl();
+    await changeAccess({ userId: pendingUserId, action: "approve" }, admin, { repo: adminRepo, calendar: approveGhl.gateway });
+    expect(approveGhl.log.removedTags).toEqual([{ contactId: "contact-1", tag: PENDING_ACCOUNT_TAG }]);
+    expect(approveGhl.log.tags.at(-1)!.tag).toBe("booking-system-user-approved");
+
+    (globalThis as { __victoryDemoState?: unknown }).__victoryDemoState = undefined;
+    adminRepo = createDemoRepository(admin.id);
+    const denyGhl = fakeGhl();
+    await changeAccess({ userId: pendingUserId, action: "deny", reason: "Please use your church email." }, admin, { repo: adminRepo, calendar: denyGhl.gateway });
+    expect(denyGhl.log.removedTags).toEqual([{ contactId: "contact-1", tag: PENDING_ACCOUNT_TAG }]);
+    expect(denyGhl.log.tags.at(-1)!.tag).toBe("booking-system-user-denied");
+
+    // Revoke/restore keep working as before.
+    const revokeGhl = fakeGhl();
+    await changeAccess({ userId: pendingUserId, action: "restore" }, admin, { repo: adminRepo, calendar: revokeGhl.gateway });
+    expect(revokeGhl.log.tags.at(-1)!.tag).toBe("booking-system-user-restored");
+  });
+
+  it("admins can retry a failed pending-review alert for an account that is still pending", async () => {
+    const ghl = fakeGhl();
+    const result = await retryAccessNotification({ userId: pendingUserId }, admin, { repo: adminRepo, calendar: ghl.gateway });
+    expect(result.ok).toBe(true);
+    expect(ghl.log.tags).toEqual([{ contactId: "contact-1", tag: PENDING_ACCOUNT_TAG }]);
   });
 });

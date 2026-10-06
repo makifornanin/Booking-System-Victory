@@ -85,9 +85,12 @@ The access decision is saved first. GHL is notified afterwards:
 
 1. The contact is found or created, then its name, email and phone are updated.
 2. For deny and revoke, the reason is written to the contact.
-3. A tag is added: `booking-system-user-approved`, `-denied`, `-revoked` or `-restored`.
+3. For approve and deny, `booking-system-user-pending` is removed.
+4. A tag is added: `booking-system-user-approved`, `-denied`, `-revoked` or `-restored`.
 
 If the notification fails, the decision stays, and the user page shows a **Retry email** button.
+
+**New sign-ups:** right after registration, and without delaying it, the server finds or creates the member's GHL contact (name, email, phone). It then removes and re-adds `booking-system-user-pending`, which starts the internal "New Account Pending Review" alert. If GHL is down, registration still succeeds; the failure is logged and shown on the admin user page with a retry button.
 
 ### Object storage
 
@@ -105,10 +108,20 @@ Uploads go under these prefixes: `announcements/`, `rooms/` (room photos) and `m
 - **Staff assignment:** appointments are assigned to the calendar's primary (or first selected) team member. The app reads that member from the calendar and caches it for 10 minutes. If a calendar has no team member, approval stops with a clear message, and the booking stays pending.
 - **Booking fields:** set the contact custom field IDs in `GHL_FIELD_BOOKING_*_ID`. If any are blank, the app looks them up by field key (`contact.booking_room`, …).
 - **Account fields:** create a contact text field with key `contact.account_access_reason` and set `GHL_FIELD_ACCOUNT_ACCESS_REASON_ID`. A `contact.account_status` field (`GHL_FIELD_ACCOUNT_STATUS_ID`) is optional.
-- **Workflows:**
-  - Room Booking - Approved: appointment booked in each room calendar.
-  - Room Booking - Denied: tag `room-booking-denied`.
-  - Four account workflows, one per tag above.
+- **Workflows and the tags that start them** (the workflows themselves are set up in GHL):
+
+  | Workflow | Trigger | Audience |
+  | --- | --- | --- |
+  | Room Booking - Approved | appointment booked in a room calendar | member |
+  | Room Booking - Denied | tag `room-booking-denied` | member |
+  | Account approved / denied / revoked / restored | tags `booking-system-user-approved`, `-denied`, `-revoked`, `-restored` | member |
+  | Victory Booking - New Account Pending Review | tag `booking-system-user-pending` (removed once the account is approved or denied) | church office |
+  | Victory Booking - Booking Pending Review | tag `room-booking-pending-review` (removed once the booking is approved or denied) | church office |
+  | Victory Booking - Reschedule Pending Review | tag `room-booking-reschedule-pending-review` (removed once the reschedule is approved or denied) | church office |
+  | Victory Booking - Reschedule Approved | tag `room-booking-reschedule-approved` | member |
+  | Victory Booking - Reschedule Denied | tag `room-booking-reschedule-denied` | member |
+
+  Every trigger tag is removed first if the contact already has it, so the workflow runs again. Before a tag is added, the contact's Booking Room, Event, Date and Time fields hold the request's values: the requested new time for reschedules, plus Booking Denial Reason for denials. Pending-review alerts are sent after the response; if GHL fails, the request is still saved.
 
 **Approval order:**
 
@@ -124,6 +137,14 @@ Uploads go under these prefixes: `announcements/`, `rooms/` (room photos) and `m
 If any GHL step fails, the booking stays pending and the admin sees the error in the dialog.
 
 **Denial:** the server writes the same fields plus Booking Denial Reason, then adds `GHL_DENIAL_TAG`, which starts the denial workflow. If the contact already has the tag, the server removes it first so the trigger fires again.
+
+**Reschedules:** members can ask to move an upcoming approved booking to a new date and time in the same room (My bookings → **Request reschedule**). It's a request, not a change:
+
+- The original booking stays approved, with its GHL appointment and Google event, until an admin decides.
+- While the request is pending, the requested slot is held: it counts as reserved everywhere, alongside the original slot. The database enforces this, and only one pending request per booking is allowed.
+- **Approve** (Booking requests → Reschedule): re-checks the requested time live, moves the **existing** GHL appointment (same id, still confirmed), then moves the same booking and closes the request in one database step. If the database step fails, the GHL appointment is moved back. The contact fields get the new time and `room-booking-reschedule-approved` is added. Finally the member's existing Google event is updated in place; if that fails, the booking page shows **Retry calendar sync**.
+- **Deny** (reason required): writes the requested time and the reason to the contact and adds `room-booking-reschedule-denied`. The original booking, GHL appointment and Google event are untouched, and the held slot is released.
+- Members can withdraw a pending request. Cancelling the booking releases it too. Every request is kept for history: requester, original and requested times, reviewer and reason.
 
 **Cancellation:** when an approved booking is cancelled, by the member or by an admin:
 

@@ -7,6 +7,8 @@ import type {
   BookingDetails,
   BookingWithRoom,
   Profile,
+  RescheduleRequest,
+  RescheduleStatus,
   Role,
   Room,
   UserSummary,
@@ -240,5 +242,46 @@ export function toAnnouncement(row: AnnouncementRow): Announcement {
     createdBy: row.created_by,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
+  };
+}
+
+export interface RescheduleRow {
+  id: string;
+  booking_id: string;
+  room_id: string;
+  requested_by: string;
+  original_start: Timestamp;
+  original_end: Timestamp;
+  requested_start: Timestamp;
+  requested_end: Timestamp;
+  status: RescheduleStatus;
+  denial_reason: string | null;
+  reviewed_by: string | null;
+  reviewed_at: Timestamp | null;
+  review_locked_at: Timestamp | null;
+  review_locked_by: string | null;
+  notification_error: string | null;
+  created_at: Timestamp;
+  reviewer_name?: string | null;
+}
+
+export function toRescheduleRequest(row: RescheduleRow): RescheduleRequest {
+  return {
+    id: row.id,
+    bookingId: row.booking_id,
+    roomId: row.room_id,
+    requestedBy: row.requested_by,
+    originalStart: iso(row.original_start),
+    originalEnd: iso(row.original_end),
+    requestedStart: iso(row.requested_start),
+    requestedEnd: iso(row.requested_end),
+    status: row.status,
+    denialReason: row.denial_reason,
+    reviewedBy: row.reviewed_by,
+    reviewedAt: isoOrNull(row.reviewed_at),
+    reviewLockedAt: isoOrNull(row.review_locked_at),
+    reviewLockedBy: row.review_locked_by,
+    notificationError: row.notification_error,
+    createdAt: iso(row.created_at),
   };
 }

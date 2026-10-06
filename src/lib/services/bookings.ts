@@ -6,12 +6,13 @@ import { isRangeBookable, toRange } from "@/lib/domain/availability";
 import { canMemberCancel, validateBookingWindow } from "@/lib/domain/booking-rules";
 import { dateKeyInZone, formatDate, formatTime, zonedDateTime } from "@/lib/domain/time";
 import { GhlError, ghlUserMessage } from "@/lib/ghl/errors";
-import { resolveCalendarId, type BookingFieldValues, type CalendarGateway } from "@/lib/ghl/gateway";
+import { REVIEW_ALERT_TAGS, resolveCalendarId, type BookingFieldValues, type CalendarGateway, type GhlContactRef } from "@/lib/ghl/gateway";
 import type { GoogleCalendarGateway } from "@/lib/google/gateway";
 import { getRoomDayAvailability, isWindowFreeInCalendar } from "@/lib/services/availability";
 import { SYNC_MESSAGES, syncApprovedBooking, type CalendarSyncOutcome } from "@/lib/services/calendar-sync";
 import { syncGhlContact } from "@/lib/services/ghl-contact";
 import { failure, fieldErrorsFrom, success, type ServiceResult } from "@/lib/services/result";
+import { clearReviewAlert, queueReviewAlert, type ReviewAlerts } from "@/lib/services/review-alerts";
 import { notifyStatusChange, type BookingStatusNotifier } from "@/lib/services/status-notifier";
 import { bookingIdSchema, bookingRequestSchema, denialSchema } from "@/lib/validation/booking";
 
@@ -22,6 +23,8 @@ export interface BookingServiceDeps {
   now: () => Date;
   /** Optional: tells n8n when a WhatsApp booking is approved, denied or cancelled. */
   notifier?: BookingStatusNotifier;
+  /** Optional: internal GHL alerts while new or reschedule requests wait for review. */
+  reviewAlerts?: ReviewAlerts;
 }
 
 /** A concurrent request took the time between the availability check and the insert. */
@@ -117,6 +120,17 @@ export async function createBookingRequest(
       source: origin.source,
       whatsappMessageId: origin.whatsappMessageId ?? null,
     });
+    if (deps.reviewAlerts) {
+      const alerts = deps.reviewAlerts;
+      queueReviewAlert(() =>
+        alerts.bookingRequested({
+          ...booking,
+          room: { id: room.id, name: room.name, slug: room.slug, locationLabel: room.locationLabel },
+          requester: { id: actor!.id, fullName: actor!.fullName, email: actor!.email, phone: actor!.phone, ghlContactId: null },
+          reviewer: null,
+        }),
+      );
+    }
     return success({ bookingId: booking.id }, "Request sent. It's pending review by the church office.");
   } catch (error) {
     return repositoryFailure(error);
@@ -377,6 +391,7 @@ export async function approveBooking(
   // Google Calendar comes last and can never undo the approval.
   const calendarSync = await syncApprovedBooking({ ...details, ...approved, status: "approved", googleCalendarEventId: null }, deps);
   notifyStatusChange(deps.notifier, { ...details, ...approved, status: "approved" }, "approved");
+  await clearReviewAlert(deps.calendar, { id: contactId, tags: null }, REVIEW_ALERT_TAGS.booking);
   const message =
     SYNC_MESSAGES[calendarSync] ??
     (calendarSync === "disabled"
@@ -410,6 +425,7 @@ export async function denyBooking(
   const { release } = lock;
 
   let details: BookingDetails | null;
+  let deniedContact: GhlContactRef | null = null;
   try {
     details = await deps.repo.getBookingDetails(bookingId);
     if (!details || details.status !== "pending") {
@@ -424,6 +440,7 @@ export async function denyBooking(
     // The denial workflow reads these fields when the tag is added.
     const contact = await syncGhlContact(deps.calendar, deps.repo, details.requester, { fields: bookingFieldValues(details, reason) });
     await deps.calendar.addTriggerTag(contact, deps.calendar.bookingDeniedTag);
+    deniedContact = contact;
   } catch (error) {
     await release();
     return ghlFailure(error);
@@ -448,5 +465,6 @@ export async function denyBooking(
   }
 
   notifyStatusChange(deps.notifier, { ...details, ...deniedBooking, status: "denied", denialReason: reason }, "denied");
+  await clearReviewAlert(deps.calendar, deniedContact, REVIEW_ALERT_TAGS.booking);
   return success(undefined, "Booking denied. GHL will email the requester with your reason.");
 }

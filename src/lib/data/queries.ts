@@ -8,7 +8,17 @@ import { getRepository } from "@/lib/data";
  */
 export const getRepositoryForRequest = cache(getRepository);
 
-export const getBookingCounts = cache(async () => (await getRepositoryForRequest()).countBookingsByStatus());
+/** Admin request counts: new bookings plus reschedule requests, by status. */
+export const getBookingCounts = cache(async () => {
+  const repo = await getRepositoryForRequest();
+  const [bookings, reschedules] = await Promise.all([repo.countBookingsByStatus(), repo.countRescheduleRequestsByStatus()]);
+  return {
+    ...bookings,
+    pending: bookings.pending + reschedules.pending,
+    approved: bookings.approved + reschedules.approved,
+    denied: bookings.denied + reschedules.denied,
+  };
+});
 
 export const getUserCounts = cache(async () => (await getRepositoryForRequest()).countUsersByAccessStatus());
 

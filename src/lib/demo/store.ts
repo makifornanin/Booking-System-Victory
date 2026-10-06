@@ -1,6 +1,6 @@
 import "server-only";
 import type { TimeRange } from "@/lib/domain/availability";
-import type { AccessChange, AccessStatus, Announcement, Booking, Role, Room } from "@/lib/data/types";
+import type { AccessChange, AccessStatus, Announcement, Booking, RescheduleRequest, Role, Room } from "@/lib/data/types";
 import { isProduction } from "@/lib/env";
 import { createDemoSeed } from "@/lib/demo/seed";
 
@@ -35,6 +35,7 @@ export interface DemoState {
   accessEvents: DemoAccessEvent[];
   rooms: Room[];
   bookings: Booking[];
+  reschedules: RescheduleRequest[];
   announcements: Announcement[];
   files: Map<string, { bytes: Uint8Array; contentType: string }>;
   /** Simulated GHL appointments, keyed by appointment id. */

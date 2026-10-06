@@ -81,7 +81,7 @@ export function createDemoAuthProvider(): AuthProvider {
         createdAt: new Date().toISOString(),
       });
       await setSession(id);
-      return { ok: true, needsConfirmation: false };
+      return { ok: true, needsConfirmation: false, userId: id };
     },
 
     async signOut() {

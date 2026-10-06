@@ -21,6 +21,11 @@ export function canMemberCancel(booking: { status: BookingStatus; startTime: str
   return (booking.status === "pending" || booking.status === "approved") && new Date(booking.startTime).getTime() > now.getTime();
 }
 
+/** Members may ask to move their own future approved bookings (a request, reviewed by an admin). */
+export function canRequestReschedule(booking: { status: BookingStatus; startTime: string }, now: Date): boolean {
+  return booking.status === "approved" && new Date(booking.startTime).getTime() > now.getTime();
+}
+
 interface WindowInput {
   start: Date;
   end: Date;

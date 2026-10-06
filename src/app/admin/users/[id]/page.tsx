@@ -63,7 +63,11 @@ export default async function AdminUserPage({ params }: PageProps<"/admin/users/
       </header>
 
       {profile.accessNotificationError && (
-        <Notice tone="warning" title="Access updated, but the notification email failed." action={<RetryNotificationButton userId={profile.id} />}>
+        <Notice
+          tone="warning"
+          title={profile.accessStatus === "pending" ? "The new-account alert to the church office couldn\u2019t be sent." : "Access updated, but the notification email failed."}
+          action={<RetryNotificationButton userId={profile.id} />}
+        >
           {profile.accessNotificationError}
         </Notice>
       )}
