@@ -17,6 +17,8 @@ const SECRET_KEYS = [
   "GOOGLE_CLIENT_SECRET",
   "GOOGLE_TOKEN_ENCRYPTION_KEY",
   "ESV_API_KEY",
+  "N8N_BOOKING_API_KEY",
+  "N8N_WEBHOOK_SIGNING_SECRET",
 ];
 
 // Names that only server code mentions; seeing them in a client chunk means server code leaked.

@@ -166,3 +166,35 @@ export function getSupportEmail(): string | null {
   const value = process.env.SUPPORT_EMAIL?.trim();
   return value && z.email().safeParse(value).success ? value : null;
 }
+
+/**
+ * Shared secret n8n sends as `Authorization: Bearer …` on /api/bot/*. Null when
+ * unset or too short, in which case every bot request is refused.
+ */
+export function getBotApiKey(): string | null {
+  const value = process.env.N8N_BOOKING_API_KEY?.trim();
+  if (!value) return null;
+  if (value.length < 32) {
+    console.error("[config] N8N_BOOKING_API_KEY must be at least 32 characters; the bot API stays disabled.");
+    return null;
+  }
+  return value;
+}
+
+export interface StatusWebhookConfig {
+  url: string;
+  secret: string;
+}
+
+/** Optional n8n webhook for WhatsApp booking status changes. Needs both the URL and a signing secret. */
+export function getStatusWebhookConfig(): StatusWebhookConfig | null {
+  const url = process.env.N8N_STATUS_WEBHOOK_URL?.trim();
+  if (!url) return null;
+  const secret = process.env.N8N_WEBHOOK_SIGNING_SECRET?.trim();
+  const validUrl = z.url({ protocol: isProduction() ? /^https$/ : /^https?$/ }).safeParse(url).success;
+  if (!validUrl || !secret || secret.length < 32) {
+    console.error("[config] N8N_STATUS_WEBHOOK_URL needs a valid URL and an N8N_WEBHOOK_SIGNING_SECRET of 32+ characters; status notifications are off.");
+    return null;
+  }
+  return { url, secret };
+}

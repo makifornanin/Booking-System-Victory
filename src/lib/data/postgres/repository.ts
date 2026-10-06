@@ -40,6 +40,8 @@ function toRepositoryError(error: unknown, context: string): RepositoryError {
   switch (code) {
     case "23P01":
       return new RepositoryError("conflict", "That time overlaps another booking for this room.");
+    case "23505":
+      return new RepositoryError("duplicate", "That request was already received.");
     case "23514":
     case "22023":
     case "23502":
@@ -173,11 +175,31 @@ export function createPostgresRepository(actorId: string | null): Repository {
     async insertBooking(input) {
       const row = await first<BookingRow>(
         "insertBooking",
-        `insert into public.bookings (user_id, room_id, event_name, event_type, purpose, attendee_count, start_time, end_time)
-         values ($1, $2, $3, $4, $5, $6, $7, $8) returning *`,
-        [input.userId, input.roomId, input.eventName, input.eventType, input.purpose, input.attendeeCount, input.startTime, input.endTime],
+        `insert into public.bookings (user_id, room_id, event_name, event_type, purpose, attendee_count, start_time, end_time, source, whatsapp_message_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *`,
+        [
+          input.userId,
+          input.roomId,
+          input.eventName,
+          input.eventType,
+          input.purpose,
+          input.attendeeCount,
+          input.startTime,
+          input.endTime,
+          input.source ?? "web",
+          input.whatsappMessageId ?? null,
+        ],
       );
       return toBooking(row!);
+    },
+
+    async findBookingByWhatsAppMessageId(messageId) {
+      const row = await first<BookingDetailsRow>(
+        "findBookingByWhatsAppMessageId",
+        `${BOOKING_DETAILS_SELECT} where b.whatsapp_message_id = $1`,
+        [messageId],
+      );
+      return row ? toBookingDetails(row) : null;
     },
 
     async listBookingsForUser(userId) {

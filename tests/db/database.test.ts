@@ -296,3 +296,25 @@ describe("server-only tables", () => {
     expect(await after()).toBe("evt123");
   });
 });
+
+describe("WhatsApp bookings (bot API)", () => {
+  it("records the source, keeps WhatsApp message ids unique and hides notification columns from members", async () => {
+    await as(ALICE, async () => {
+      const web = await rows<{ source: string }>(`${insertBooking(ALICE, "17:00", "17:30").replace("returning id, status", "returning source")}`);
+      expect(web[0].source).toBe("web");
+
+      const whatsapp = await rows<{ source: string; whatsapp_message_id: string }>(
+        insertBooking(ALICE, "18:00", "19:00", "source, whatsapp_message_id", "'whatsapp', 'wamid.TEST1'").replace("returning id, status", "returning source, whatsapp_message_id"),
+      );
+      expect(whatsapp[0]).toEqual({ source: "whatsapp", whatsapp_message_id: "wamid.TEST1" });
+
+      // The same WhatsApp message can never create a second booking.
+      expect(await errorCode(insertBooking(ALICE, "19:00", "20:00", "source, whatsapp_message_id", "'whatsapp', 'wamid.TEST1'"))).toBe("23505");
+      // A message id only makes sense on a WhatsApp booking, and the source is limited.
+      expect(await errorCode(insertBooking(ALICE, "19:00", "20:00", "whatsapp_message_id", "'wamid.TEST2'"))).toBe("23514");
+      expect(await errorCode(insertBooking(ALICE, "19:00", "20:00", "source", "'sms'"))).toBe("23514");
+      // Notification bookkeeping is written by the server only.
+      expect(await errorCode(`update public.bookings set status_notification_error = 'x' where user_id = '${ALICE}'`)).toBe("42501");
+    });
+  });
+});

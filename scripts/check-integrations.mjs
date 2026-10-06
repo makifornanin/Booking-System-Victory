@@ -12,6 +12,7 @@ const fail = (label, detail = "") => {
   console.log(`FAIL  ${label}${detail ? `  (${detail})` : ""}`);
 };
 const skip = (label, detail) => console.log(`SKIP  ${label}  (${detail})`);
+const warn = (label, detail) => console.log(`WARN  ${label}  (${detail})`);
 
 async function check(label, fn) {
   try {
@@ -66,6 +67,14 @@ await check("Admin account", async () => {
   if (rows[0].n === 0) throw new Error("no admin yet — sign up with ADMIN_EMAIL, then run npm run db:bootstrap-admin");
   return `${rows[0].n} admin(s)`;
 });
+// The WhatsApp assistant identifies members by phone, so one number must map to one account.
+await db
+  .query("select count(*)::int as n from (select phone from public.profiles where phone is not null group by phone having count(*) > 1) d")
+  .then(({ rows }) => {
+    if (rows[0].n === 0) ok("Unique phone numbers (WhatsApp identity)", "each number belongs to one account");
+    else warn("Unique phone numbers (WhatsApp identity)", `${rows[0].n} number(s) shared by several accounts; the bot answers PHONE_AMBIGUOUS for them until one account's number is changed`);
+  })
+  .catch((error) => fail("Unique phone numbers (WhatsApp identity)", error.message));
 await db.end().catch(() => undefined);
 
 // --- Neon Auth ------------------------------------------------------------
@@ -227,6 +236,16 @@ if (env.ESV_API_KEY?.trim()) {
 } else {
   skip("ESV API (Verse of the Day)", "ESV_API_KEY not set; the dashboard shows the reference with a link instead of the text");
 }
+
+// --- WhatsApp assistant (n8n) ----------------------------------------------
+const botKey = env.N8N_BOOKING_API_KEY?.trim();
+if (!botKey) skip("n8n bot API key", "N8N_BOOKING_API_KEY not set; /api/bot/* refuses every request");
+else if (botKey.length < 32) fail("n8n bot API key", "N8N_BOOKING_API_KEY must be at least 32 characters");
+else ok("n8n bot API key", `${botKey.length} characters`);
+const statusUrl = env.N8N_STATUS_WEBHOOK_URL?.trim();
+if (!statusUrl) skip("n8n status webhook", "N8N_STATUS_WEBHOOK_URL not set; WhatsApp status notifications are off");
+else if ((env.N8N_WEBHOOK_SIGNING_SECRET?.trim().length ?? 0) < 32) fail("n8n status webhook", "N8N_WEBHOOK_SIGNING_SECRET (32+ characters) is required with N8N_STATUS_WEBHOOK_URL");
+else ok("n8n status webhook", `signed POSTs to ${new URL(statusUrl).origin}`);
 
 console.log(failures ? `\n${failures} check(s) failed` : "\nAll checks passed");
 process.exit(failures ? 1 : 0);

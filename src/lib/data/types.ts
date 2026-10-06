@@ -50,6 +50,8 @@ export interface Room {
   displayOrder: number;
 }
 
+export type BookingSource = "web" | "whatsapp";
+
 export interface Booking {
   id: string;
   userId: string;
@@ -65,6 +67,14 @@ export interface Booking {
   ghlAppointmentId: string | null;
   googleCalendarEventId: string | null;
   googleCalendarSyncError: string | null;
+  /** Where the request came from. WhatsApp requests come through the n8n assistant. */
+  source: BookingSource;
+  /** WhatsApp message that created the request (idempotency key). */
+  whatsappMessageId: string | null;
+  /** Last status notification sent to n8n (WhatsApp bookings only). */
+  statusNotificationStatus: string | null;
+  statusNotificationError: string | null;
+  statusNotifiedAt: string | null;
   reviewedBy: string | null;
   reviewedAt: string | null;
   reviewLockedAt: string | null;
@@ -83,6 +93,8 @@ export interface BookingDetails extends BookingWithRoom {
 
 export interface NewBooking {
   userId: string;
+  source?: BookingSource;
+  whatsappMessageId?: string | null;
   roomId: string;
   eventName: string;
   eventType: string;

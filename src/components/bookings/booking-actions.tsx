@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { RefreshCw } from "lucide-react";
-import { cancelBookingAction, retryCalendarSyncAction } from "@/app/actions/bookings";
+import { cancelBookingAction, retryCalendarSyncAction, retryStatusNotificationAction } from "@/app/actions/bookings";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 
@@ -78,6 +78,29 @@ export function RetryCalendarSyncButton({ bookingId, size = "sm" }: { bookingId:
     >
       <RefreshCw className="size-3.5" aria-hidden />
       Retry calendar sync
+    </Button>
+  );
+}
+
+/** Admin: resend the WhatsApp status message (via n8n) after a failed delivery. */
+export function RetryStatusNotificationButton({ bookingId }: { bookingId: string }) {
+  const [pending, startTransition] = useTransition();
+  return (
+    <Button
+      variant="secondary"
+      size="sm"
+      busy={pending}
+      busyLabel="Sending…"
+      onClick={() =>
+        startTransition(async () => {
+          const result = await retryStatusNotificationAction(bookingId);
+          if (result.ok) toast.success(result.message);
+          else toast.error(result.error);
+        })
+      }
+    >
+      <RefreshCw className="size-3.5" aria-hidden />
+      Retry WhatsApp notification
     </Button>
   );
 }

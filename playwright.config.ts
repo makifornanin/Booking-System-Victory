@@ -26,6 +26,7 @@ export default defineConfig({
     url: `http://localhost:${PORT}/login`,
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
-    env: { DEMO_MODE: "true", NEXT_DIST_DIR: ".next-e2e" },
+    // Test-only bot key for the demo server (not a real secret).
+    env: { DEMO_MODE: "true", NEXT_DIST_DIR: ".next-e2e", N8N_BOOKING_API_KEY: "e2e-demo-bot-key-not-a-secret-0123456789" },
   },
 });

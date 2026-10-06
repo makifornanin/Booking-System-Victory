@@ -2,9 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth/session";
+import { recordStatusNotification } from "@/lib/bot/notifier";
+import { buildStatusPayload, deliverStatusWebhook } from "@/lib/bot/status-webhook";
+import { getRepository } from "@/lib/data";
+import { getStatusWebhookConfig } from "@/lib/env";
 import { ConfigError } from "@/lib/env";
 import { approveBooking, cancelBooking, createBookingRequest, denyBooking, type ApprovalResult } from "@/lib/services/bookings";
 import { retryCalendarSync } from "@/lib/services/calendar-sync";
+import { retryStatusNotification } from "@/lib/services/status-notifications";
 import { getBookingDeps, getCalendarSyncDeps } from "@/lib/services/deps";
 import { failure, type ServiceResult } from "@/lib/services/result";
 
@@ -80,4 +85,16 @@ export async function retryCalendarSyncAction(bookingId: string): Promise<Servic
     revalidatePath(`/admin/bookings/${bookingId}`);
   }
   return result.ok ? { ok: true, data: undefined, message: result.message } : result;
+}
+
+/** Admin: resend the n8n/WhatsApp status notification for a WhatsApp booking. */
+export async function retryStatusNotificationAction(bookingId: string): Promise<ServiceResult> {
+  const config = getStatusWebhookConfig();
+  const result = await retryStatusNotification({ bookingId }, await getCurrentUser(), {
+    repo: await getRepository(),
+    deliver: config ? (booking, status) => deliverStatusWebhook(buildStatusPayload(booking, status), config) : null,
+    record: recordStatusNotification,
+  });
+  revalidateAdminViews(bookingId);
+  return result;
 }

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { CalendarX2 } from "lucide-react";
+import { CalendarX2, MessageCircle } from "lucide-react";
+import { z } from "zod";
 import { eventTypeLabel } from "@/lib/config";
 import { requireAdmin } from "@/lib/auth/session";
 import { getBookingCounts, getRepositoryForRequest } from "@/lib/data/queries";
@@ -8,6 +9,7 @@ import type { BookingDetails } from "@/lib/data/types";
 import { formatPhone } from "@/lib/domain/phone";
 import { formatDate, formatTimeRange } from "@/lib/domain/time";
 import { adminBookingTabSchema, firstParam } from "@/lib/validation/params";
+import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LinkTabs } from "@/components/ui/link-tabs";
 import { PageHeader } from "@/components/ui/page-header";
@@ -26,6 +28,13 @@ const empty = {
   denied: { title: "No denied requests", description: "Requests you deny are listed here with their reasons." },
 };
 
+const sourceSchema = z.enum(["all", "web", "whatsapp"]).catch("all");
+const SOURCES = [
+  { value: "all", label: "All sources" },
+  { value: "web", label: "Web" },
+  { value: "whatsapp", label: "WhatsApp" },
+] as const;
+
 function orderApproved(list: BookingDetails[], now: Date): BookingDetails[] {
   const upcoming = list.filter((b) => new Date(b.endTime) > now);
   const past = list.filter((b) => new Date(b.endTime) <= now).reverse();
@@ -34,10 +43,20 @@ function orderApproved(list: BookingDetails[], now: Date): BookingDetails[] {
 
 export default async function AdminBookingsPage({ searchParams }: PageProps<"/admin/bookings">) {
   await requireAdmin();
-  const status = adminBookingTabSchema.parse(firstParam((await searchParams).status));
+  const params = await searchParams;
+  const status = adminBookingTabSchema.parse(firstParam(params.status));
+  const source = sourceSchema.parse(firstParam(params.source));
   const now = new Date();
   const [list, counts] = await Promise.all([(await getRepositoryForRequest()).listBookingsByStatus(status, 200), getBookingCounts()]);
-  const bookings = status === "approved" ? orderApproved(list, now) : list;
+  const ordered = status === "approved" ? orderApproved(list, now) : list;
+  const bookings = source === "all" ? ordered : ordered.filter((b) => b.source === source);
+  const hrefFor = (s: string, src: string) => {
+    const query = new URLSearchParams();
+    if (s !== "pending") query.set("status", s);
+    if (src !== "all") query.set("source", src);
+    const qs = query.toString();
+    return qs ? `/admin/bookings?${qs}` : "/admin/bookings";
+  };
 
   return (
     <div>
@@ -50,15 +69,29 @@ export default async function AdminBookingsPage({ searchParams }: PageProps<"/ad
       <LinkTabs
         label="Request status"
         tabs={tabs.map((tab) => ({
-          href: tab.status === "pending" ? "/admin/bookings" : `/admin/bookings?status=${tab.status}`,
+          href: hrefFor(tab.status, source),
           label: tab.label,
           count: counts[tab.status],
           active: tab.status === status,
         }))}
       />
 
+      <nav aria-label="Filter by source" className="flex justify-end gap-4 pt-3 text-[13px]">
+        {SOURCES.map((option) => (
+          <Link
+            key={option.value}
+            href={hrefFor(status, option.value)}
+            scroll={false}
+            aria-current={option.value === source ? "true" : undefined}
+            className={cn("font-semibold", option.value === source ? "text-ink" : "text-muted hover:text-ink")}
+          >
+            {option.label}
+          </Link>
+        ))}
+      </nav>
+
       {bookings.length === 0 ? (
-        <EmptyState className="mt-10" {...empty[status]} />
+        <EmptyState className="mt-10" {...(source === "all" ? empty[status] : { title: "Nothing from this source", description: "Try another source filter." })} />
       ) : (
         <ul className="divide-y divide-line border-b border-line">
           <li className="hidden grid-cols-[9.5rem_minmax(0,1fr)_8rem_minmax(0,13rem)_7rem] gap-6 py-2.5 text-xs font-bold text-muted lg:grid" aria-hidden>
@@ -84,6 +117,12 @@ export default async function AdminBookingsPage({ searchParams }: PageProps<"/ad
                     {booking.eventName}
                   </Link>
                   <p className="truncate text-[13px] text-muted">
+                    {booking.source === "whatsapp" && (
+                      <span className="mr-1.5 inline-flex items-center gap-1 font-semibold text-ink-soft">
+                        <MessageCircle className="size-3" aria-hidden />
+                        WhatsApp ·
+                      </span>
+                    )}
                     {eventTypeLabel(booking.eventType)} · {booking.attendeeCount} people
                     {status === "denied" && booking.denialReason ? ` · “${booking.denialReason}”` : ""}
                   </p>

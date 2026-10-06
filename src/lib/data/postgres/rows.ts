@@ -62,6 +62,11 @@ export interface BookingRow {
   ghl_appointment_id: string | null;
   google_calendar_event_id: string | null;
   google_calendar_sync_error: string | null;
+  source: string;
+  whatsapp_message_id: string | null;
+  status_notification_status: string | null;
+  status_notification_error: string | null;
+  status_notified_at: Timestamp | null;
   reviewed_by: string | null;
   reviewed_at: Timestamp | null;
   review_locked_at: Timestamp | null;
@@ -187,6 +192,11 @@ export function toBooking(row: BookingRow): Booking {
     ghlAppointmentId: row.ghl_appointment_id,
     googleCalendarEventId: row.google_calendar_event_id,
     googleCalendarSyncError: row.google_calendar_sync_error,
+    source: row.source === "whatsapp" ? "whatsapp" : "web",
+    whatsappMessageId: row.whatsapp_message_id ?? null,
+    statusNotificationStatus: row.status_notification_status ?? null,
+    statusNotificationError: row.status_notification_error ?? null,
+    statusNotifiedAt: isoOrNull(row.status_notified_at ?? null),
     reviewedBy: row.reviewed_by,
     reviewedAt: isoOrNull(row.reviewed_at),
     reviewLockedAt: isoOrNull(row.review_locked_at),

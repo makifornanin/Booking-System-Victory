@@ -1,7 +1,7 @@
 import { REVIEW_LOCK_TTL_MS, eventTypeLabel } from "@/lib/config";
 import type { SessionUser } from "@/lib/auth/provider";
 import { RepositoryError, type Repository } from "@/lib/data/repository";
-import type { BookingDetails } from "@/lib/data/types";
+import type { BookingDetails, BookingSource } from "@/lib/data/types";
 import { isRangeBookable, toRange } from "@/lib/domain/availability";
 import { canMemberCancel, validateBookingWindow } from "@/lib/domain/booking-rules";
 import { dateKeyInZone, formatDate, formatTime, zonedDateTime } from "@/lib/domain/time";
@@ -12,6 +12,7 @@ import { getRoomDayAvailability, isWindowFreeInCalendar } from "@/lib/services/a
 import { SYNC_MESSAGES, syncApprovedBooking, type CalendarSyncOutcome } from "@/lib/services/calendar-sync";
 import { syncGhlContact } from "@/lib/services/ghl-contact";
 import { failure, fieldErrorsFrom, success, type ServiceResult } from "@/lib/services/result";
+import { notifyStatusChange, type BookingStatusNotifier } from "@/lib/services/status-notifier";
 import { bookingIdSchema, bookingRequestSchema, denialSchema } from "@/lib/validation/booking";
 
 export interface BookingServiceDeps {
@@ -19,7 +20,12 @@ export interface BookingServiceDeps {
   calendar: CalendarGateway;
   google: GoogleCalendarGateway;
   now: () => Date;
+  /** Optional: tells n8n when a WhatsApp booking is approved, denied or cancelled. */
+  notifier?: BookingStatusNotifier;
 }
+
+/** A concurrent request took the time between the availability check and the insert. */
+export const BOOKING_RACE_MESSAGE = "Someone just booked that time. Please pick another slot.";
 
 const ALREADY_REVIEWED: Record<string, string> = {
   approved: "This request was already approved.",
@@ -29,7 +35,8 @@ const ALREADY_REVIEWED: Record<string, string> = {
 
 function repositoryFailure<T>(error: unknown): ServiceResult<T> {
   if (error instanceof RepositoryError) {
-    if (error.code === "conflict") return failure("conflict", "That time is no longer available. Please pick another slot.");
+    if (error.code === "conflict") return failure("conflict", BOOKING_RACE_MESSAGE);
+    if (error.code === "duplicate") return failure("duplicate", error.message);
     if (error.code === "invalid") return failure("invalid", error.message);
     if (error.code === "forbidden") return failure("forbidden", error.message);
   }
@@ -47,10 +54,17 @@ function guard(actor: SessionUser | null): ServiceResult<never> | null {
 // Member: request a booking
 // ---------------------------------------------------------------------------
 
+export interface BookingOrigin {
+  source: BookingSource;
+  /** WhatsApp message id; the database rejects a second booking for the same message. */
+  whatsappMessageId?: string | null;
+}
+
 export async function createBookingRequest(
   rawInput: unknown,
   actor: SessionUser | null,
   deps: BookingServiceDeps,
+  origin: BookingOrigin = { source: "web" },
 ): Promise<ServiceResult<{ bookingId: string }>> {
   const denied = guard(actor);
   if (denied) return denied;
@@ -100,6 +114,8 @@ export async function createBookingRequest(
       attendeeCount: input.attendeeCount,
       startTime: start.toISOString(),
       endTime: end.toISOString(),
+      source: origin.source,
+      whatsappMessageId: origin.whatsappMessageId ?? null,
     });
     return success({ bookingId: booking.id }, "Request sent. It's pending review by the church office.");
   } catch (error) {
@@ -161,6 +177,7 @@ export async function cancelBooking(
     }
   }
 
+  notifyStatusChange(deps.notifier, { ...booking, ...cancelled, status: "cancelled" }, "cancelled");
   return success(
     { calendarCleanupFailed },
     calendarCleanupFailed ? "Booking cancelled, but the Google Calendar event couldn't be removed." : "Booking cancelled.",
@@ -359,6 +376,7 @@ export async function approveBooking(
 
   // Google Calendar comes last and can never undo the approval.
   const calendarSync = await syncApprovedBooking({ ...details, ...approved, status: "approved", googleCalendarEventId: null }, deps);
+  notifyStatusChange(deps.notifier, { ...details, ...approved, status: "approved" }, "approved");
   const message =
     SYNC_MESSAGES[calendarSync] ??
     (calendarSync === "disabled"
@@ -391,8 +409,9 @@ export async function denyBooking(
   if (!lock.claimed) return explainUnclaimable(deps.repo, bookingId);
   const { release } = lock;
 
+  let details: BookingDetails | null;
   try {
-    const details = await deps.repo.getBookingDetails(bookingId);
+    details = await deps.repo.getBookingDetails(bookingId);
     if (!details || details.status !== "pending") {
       await release();
       return explainUnclaimable(deps.repo, bookingId);
@@ -428,5 +447,6 @@ export async function denyBooking(
     );
   }
 
+  notifyStatusChange(deps.notifier, { ...details, ...deniedBooking, status: "denied", denialReason: reason }, "denied");
   return success(undefined, "Booking denied. GHL will email the requester with your reason.");
 }

@@ -14,7 +14,7 @@ import type {
   UserSummary,
 } from "@/lib/data/types";
 
-export type RepositoryErrorCode = "conflict" | "invalid" | "not_found" | "forbidden" | "unknown";
+export type RepositoryErrorCode = "conflict" | "duplicate" | "invalid" | "not_found" | "forbidden" | "unknown";
 
 export const PENDING_LIMIT_MESSAGE =
   "You already have the maximum number of requests waiting for review. Cancel one or wait for the office to respond.";
@@ -54,8 +54,10 @@ export interface Repository {
   /** Admin-only: other blocking bookings that overlap the given window. */
   findConflictingBookings(roomId: string, range: TimeRange, excludeBookingId?: string): Promise<Booking[]>;
 
-  /** Throws RepositoryError("conflict") when the database rejects an overlap. */
+  /** Throws RepositoryError("conflict") on an overlap, RepositoryError("duplicate") on a reused WhatsApp message id. */
   insertBooking(input: NewBooking): Promise<Booking>;
+  /** The visible booking created from a WhatsApp message, if any (RLS: own bookings for members). */
+  findBookingByWhatsAppMessageId(messageId: string): Promise<BookingDetails | null>;
   listBookingsForUser(userId: string): Promise<BookingWithRoom[]>;
   listBookingsByStatus(status: BookingStatus, limit?: number): Promise<BookingDetails[]>;
   listBookingsBetween(from: Date, to: Date, statuses: BookingStatus[]): Promise<BookingDetails[]>;

@@ -4,6 +4,7 @@ export type ServiceErrorCode =
   | "invalid"
   | "not_found"
   | "conflict"
+  | "duplicate"
   | "already_reviewed"
   | "busy"
   | "calendar_error"

@@ -1,4 +1,5 @@
 import "server-only";
+import { getStatusNotifier } from "@/lib/bot/notifier";
 import { getImageStorage, getRepository } from "@/lib/data";
 import { getCalendarGateway } from "@/lib/ghl/gateway";
 import { getGoogleCalendar } from "@/lib/google/gateway";
@@ -9,7 +10,7 @@ import type { CalendarSyncDeps } from "@/lib/services/calendar-sync";
 
 export async function getBookingDeps(): Promise<BookingServiceDeps> {
   const [repo, calendar, google] = await Promise.all([getRepository(), getCalendarGateway(), getGoogleCalendar()]);
-  return { repo, calendar, google, now: () => new Date() };
+  return { repo, calendar, google, now: () => new Date(), notifier: getStatusNotifier() };
 }
 
 export async function getAccountDeps(): Promise<AccountDeps> {

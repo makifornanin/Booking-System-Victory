@@ -11,7 +11,7 @@ import { dateKeyInZone, formatDate, formatTimeRange, zonedDayRange } from "@/lib
 import { parseUuid } from "@/lib/validation/params";
 import { ReviewActions } from "@/components/admin/review-actions";
 import { SummaryList } from "@/components/admin/summary-list";
-import { CancelBookingButton, RetryCalendarSyncButton } from "@/components/bookings/booking-actions";
+import { CancelBookingButton, RetryCalendarSyncButton, RetryStatusNotificationButton } from "@/components/bookings/booking-actions";
 import { Notice } from "@/components/ui/notice";
 import { BookingStatus } from "@/components/ui/status";
 
@@ -43,6 +43,7 @@ export default async function AdminBookingPage({ params }: PageProps<"/admin/boo
     { label: "Attendees", value: booking.attendeeCount },
     { label: "Purpose", value: <span className="font-normal whitespace-pre-line">{booking.purpose}</span> },
     { label: "Submitted", value: formatDate(booking.createdAt, "d MMM yyyy, h:mm a") },
+    { label: "Source", value: booking.source === "whatsapp" ? "WhatsApp assistant" : "Website" },
   ];
   if (booking.reviewedAt) {
     details.push({
@@ -86,6 +87,11 @@ export default async function AdminBookingPage({ params }: PageProps<"/admin/boo
       {booking.status === "approved" && !booking.googleCalendarEventId && booking.googleCalendarSyncError && (
         <Notice tone="warning" title="Booking approved, but Google Calendar sync failed." action={<RetryCalendarSyncButton bookingId={booking.id} />}>
           {booking.googleCalendarSyncError}
+        </Notice>
+      )}
+      {booking.source === "whatsapp" && booking.statusNotificationError && booking.status !== "pending" && (
+        <Notice tone="warning" title="The WhatsApp status message couldn’t be sent." action={<RetryStatusNotificationButton bookingId={booking.id} />}>
+          {booking.statusNotificationError}. The {booking.status === "approved" ? "approval" : booking.status === "denied" ? "denial" : "cancellation"} itself is saved.
         </Notice>
       )}
       {booking.status === "approved" && booking.googleCalendarEventId && (

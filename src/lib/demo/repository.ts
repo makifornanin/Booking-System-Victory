@@ -188,6 +188,10 @@ export function createDemoRepository(actorId: string | null = null): Repository 
       ).length;
       if (openRequests >= MAX_PENDING_PER_USER) throw new RepositoryError("invalid", PENDING_LIMIT_MESSAGE);
 
+      if (input.whatsappMessageId && state.bookings.some((b) => b.whatsappMessageId === input.whatsappMessageId)) {
+        throw new RepositoryError("duplicate", "That request was already received.");
+      }
+
       const overlaps = state.bookings.some(
         (b) => b.roomId === input.roomId && isBlockingStatus(b.status) && rangesOverlap(toRange(b.startTime, b.endTime), range),
       );
@@ -196,6 +200,11 @@ export function createDemoRepository(actorId: string | null = null): Repository 
       const booking: Booking = {
         id: randomUUID(),
         ...input,
+        source: input.source ?? "web",
+        whatsappMessageId: input.whatsappMessageId ?? null,
+        statusNotificationStatus: null,
+        statusNotificationError: null,
+        statusNotifiedAt: null,
         status: "pending",
         denialReason: null,
         ghlAppointmentId: null,
@@ -239,6 +248,13 @@ export function createDemoRepository(actorId: string | null = null): Repository 
 
     async getBookingDetails(id) {
       const booking = state.bookings.find((b) => b.id === id);
+      return booking ? copy(withDetails(state, booking)) : null;
+    },
+
+    async findBookingByWhatsAppMessageId(messageId) {
+      // Mirrors RLS: members only see their own bookings.
+      const actorIsAdmin = state.users.find((u) => u.id === actorId)?.role === "admin";
+      const booking = state.bookings.find((b) => b.whatsappMessageId === messageId && (actorIsAdmin || b.userId === actorId));
       return booking ? copy(withDetails(state, booking)) : null;
     },
 

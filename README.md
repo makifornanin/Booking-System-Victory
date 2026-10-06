@@ -188,6 +188,22 @@ npm run check:bundle         # after `npm run build`: no secret values or server
 npm run diagnose:availability -- --from 2026-10-07 --to 2026-10-14   # read-only: compares the five room calendars' settings, staff and free slots per Manila date
 ```
 
+## WhatsApp booking assistant (n8n API)
+
+n8n (with WhatsApp and OpenAI) calls a small tool API under `/api/bot/*`. The AI interprets messages; this app decides.
+
+- **Tools:** verify-user, rooms, schedule, check-availability, suggest-alternatives, find-available-rooms, create-booking, my-bookings, booking-status.
+- **Auth:** every request needs `Authorization: Bearer <N8N_BOOKING_API_KEY>`. The key is compared in constant time, and requests are rate-limited per sender and per instance. Without the key configured, every request is refused.
+- **Identity:** the WhatsApp sender phone, passed by n8n from the trigger and never by the AI, is normalized to E.164 and matched to one **active** account. A number shared by several accounts is refused (`PHONE_AMBIGUOUS`).
+- **Same engine as the website:** every call runs as that member under row-level security. Bookings go through the existing booking service (GHL availability, local conflicts, database overlap protection) and are always **pending**. Bot requests are stored with `source = whatsapp` and their WhatsApp message id, which is unique, so retries never duplicate a booking.
+- **Privacy:** other people's bookings are returned only as anonymous "Reserved" times.
+- **Status notifications (optional):** set `N8N_STATUS_WEBHOOK_URL` and `N8N_WEBHOOK_SIGNING_SECRET`. Approved, denied and cancelled WhatsApp bookings are then POSTed to n8n, signed with HMAC-SHA256. A failed delivery never affects the review; it's recorded and can be retried from the admin booking page.
+
+**Docs for building the workflow:**
+
+- [`docs/n8n-whatsapp-agent.md`](docs/n8n-whatsapp-agent.md): every tool, its inputs and outputs, error codes and the webhook.
+- [`docs/n8n-tool-config.md`](docs/n8n-tool-config.md): copy-paste n8n tool settings.
+
 ## Public pages
 
 `/` (homepage), `/privacy` and `/terms` are public and don't require sign-in. They are what Google's OAuth review looks at. Signed-in people go to their workspace through `/portal`, which sends them to `/admin`, `/dashboard` or `/pending`. Set `SUPPORT_EMAIL` so the privacy and terms pages show a contact address.
@@ -195,7 +211,7 @@ npm run diagnose:availability -- --from 2026-10-07 --to 2026-10-14   # read-only
 ## Deploy (Vercel)
 
 1. Import the GitHub repo into Vercel (framework: Next.js). `vercel.json` pins functions to `sin1` (Singapore), next to the Neon database.
-2. Add every variable from `.env.example` to the **Production** environment, apart from `ADMIN_EMAIL`, which only the bootstrap script uses. Use the real values; never `DEMO_MODE`.
+2. Add every variable from `.env.example` to the **Production** environment, apart from `ADMIN_EMAIL`, which only the bootstrap script uses. Use the real values; never `DEMO_MODE`. `N8N_*` is only needed for the WhatsApp assistant.
 3. Set `SITE_URL=https://<production domain>` and `GOOGLE_REDIRECT_URI=https://<production domain>/api/google/callback`, then redeploy.
 4. Add the production domain under **Neon Console → Auth → Configuration → Domains**.
 5. Add the Google values from [Google Calendar](#google-calendar).
@@ -239,6 +255,7 @@ src/lib/google/      OAuth, token encryption, Calendar API, gateway
 src/lib/verse/       Verse of the Day (ESV)
 src/lib/services/    use cases (bookings, accounts, calendar sync, announcements)
 src/lib/storage/     upload validation, S3 (Neon Object Storage)
+src/lib/bot/         n8n/WhatsApp tool API: auth, identity, rooms, tools, status webhook
 src/lib/demo/        development-only in-memory adapter
 ```
 
