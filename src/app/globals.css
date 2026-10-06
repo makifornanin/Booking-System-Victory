@@ -1,26 +1,129 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+ * Victory Rooms design tokens.
+ * Victory blue and Nunito Sans come from church.victory.org.ph; the warm paper
+ * foundation and the Newsreader serif give the member side its bulletin feel.
+ */
+@theme {
+  --font-sans: var(--font-nunito-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-newsreader), ui-serif, Georgia, serif;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --color-brand: #02458d;
+  --color-brand-hover: #013a77;
+  --color-brand-deep: #012449;
+  --color-brand-tint: #eaf0f8;
+  --color-accent: #f0994e;
+  --color-accent-ink: #a8540f;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  --color-canvas: #faf8f4;
+  --color-surface: #ffffff;
+  --color-sunken: #f3f0e9;
+  --color-ink: #16181d;
+  --color-ink-soft: #3a3e46;
+  --color-muted: #646972;
+  --color-subtle: #8b9099;
+  --color-line: #e7e2d8;
+  --color-line-strong: #d4ccbe;
+
+  --color-pending: #9a5800;
+  --color-pending-bg: #fbf0dc;
+  --color-approved: #1d6a44;
+  --color-approved-bg: #e6f2eb;
+  --color-denied: #a3303a;
+  --color-denied-bg: #f8e6e7;
+  --color-cancelled: #646972;
+  --color-cancelled-bg: #efece6;
+
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --animate-fade-up: fade-up 0.45s var(--ease-out-quint) both;
+  --animate-fade-in: fade-in 0.3s ease-out both;
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+    font-feature-settings: "kern", "liga";
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  ::selection {
+    background: var(--color-brand-tint);
+  }
+
+  dialog::backdrop {
+    background: rgb(22 24 29 / 0.42);
+  }
+}
+
+/* Small uppercase label, Victory's tracked-caps voice used sparingly. */
+@utility eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* Editorial serif headline for member-facing moments. */
+@utility headline {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  line-height: 1.08;
+}
+
+/* Functional heading for admin and forms. */
+@utility title {
+  font-weight: 800;
+  letter-spacing: -0.012em;
+  line-height: 1.15;
+}
+
+@utility hairline {
+  border-color: var(--color-line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

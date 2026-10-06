@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1350" width="1080" height="1350" font-family="'Nunito Sans', 'Segoe UI', Arial, sans-serif">
+  <rect width="1080" height="1350" fill="#02458d"/>
+  <text x="96" y="380" font-size="34" font-weight="800" letter-spacing="7" fill="#ffffff" opacity="0.85">THIS SUNDAY</text>
+  <rect x="96" y="420" width="120" height="12" fill="#f0994e"/>
+  <text x="96" y="600" font-size="102" font-weight="900" letter-spacing="1" fill="#ffffff">SUNDAY</text>
+  <text x="96" y="716" font-size="102" font-weight="900" letter-spacing="1" fill="#ffffff">CELEBRATION</text>
+  <text x="96" y="1010" font-size="44" font-weight="800" fill="#ffffff" opacity="1">Worship · Word · Community</text>
+  <text x="96" y="1068" font-size="38" font-weight="600" fill="#ffffff" opacity="0.8">9:00 AM  ·  11:00 AM  ·  4:00 PM</text>
+  <text x="96" y="1270" font-size="24" font-weight="700" letter-spacing="4" fill="#ffffff" opacity="0.55">SAMPLE POSTER · DEMO DATA</text>
+</svg>
