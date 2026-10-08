@@ -15,7 +15,7 @@ import {
 import { failure, type ServiceResult } from "@/lib/services/result";
 
 export type RescheduleActionState = ServiceResult<{ requestId: string }> | null;
-export type RescheduleReviewState = ServiceResult | null;
+export type RescheduleReviewState = ServiceResult<{ notificationFailed: boolean }> | null;
 
 async function withConfig<T>(run: () => Promise<ServiceResult<T>>): Promise<ServiceResult<T>> {
   try {

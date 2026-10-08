@@ -20,6 +20,11 @@ export class GhlError extends Error {
   }
 }
 
+/** GHL refuses to create/update a contact because another contact already has that email or phone. */
+export function isDuplicateContactError(error: unknown): error is GhlError {
+  return error instanceof GhlError && error.kind === "rejected" && /duplicat/i.test(error.message);
+}
+
 /** Message safe to show an admin or member. Never includes tokens or raw responses. */
 export function ghlUserMessage(error: unknown): string {
   if (!(error instanceof GhlError)) return "The church calendar could not be reached. Please try again.";

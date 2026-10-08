@@ -48,6 +48,16 @@ function insertBooking(userId: string, from: string, to: string, extraColumn = "
 
 const rows = async <T>(sql: string) => (await db.query<T>(sql)).rows;
 
+/** The database error message, or null if the statement succeeded. */
+async function errorMessage(sql: string): Promise<string | null> {
+  try {
+    await db.query(sql);
+    return null;
+  } catch (error) {
+    return (error as { message?: string }).message ?? "unknown";
+  }
+}
+
 beforeAll(async () => {
   db = new PGlite({ extensions: { btree_gist } });
   for (const file of readdirSync(MIGRATIONS).sort()) {
@@ -391,5 +401,139 @@ describe("reschedule requests", () => {
     const r2 = (await as(ALICE, () => rows<{ id: string }>(requestFor(booking, "19:00", "20:00"))))[0].id;
     await as(ALICE, () => db.query(`select * from public.cancel_my_booking('${booking}')`));
     expect((await rows<{ status: string }>(`select status from public.booking_reschedule_requests where id = '${r2}'`))[0].status).toBe("cancelled");
+  });
+});
+
+describe("denials and past-due requests", () => {
+  const hour = new Date();
+  hour.setUTCMinutes(0, 0, 0);
+  const hoursAgo = (h: number) => new Date(hour.getTime() - h * 3_600_000).toISOString();
+
+  /** Owner-only setup: a pending request whose start time already passed (insert checks bypassed). */
+  async function pastPending(startedHoursAgo: number) {
+    await db.exec("set session_replication_role = replica");
+    try {
+      const sql = `insert into public.bookings (user_id, room_id, event_name, event_type, purpose, attendee_count, start_time, end_time)
+        values ('${BOB}', '${roomA}', 'Old request', 'other', 'Test', 3, '${hoursAgo(startedHoursAgo)}', '${hoursAgo(startedHoursAgo - 1)}') returning id`;
+      return (await rows<{ id: string }>(sql))[0].id;
+    } finally {
+      await db.exec("set session_replication_role = origin");
+    }
+  }
+
+  it("refuses to approve a pending request whose start time has passed, but lets an admin close it", async () => {
+    const id = await pastPending(48);
+    await as(ADMIN, async () => {
+      expect(await errorMessage(`update public.bookings set status = 'approved', reviewed_by = '${ADMIN}', reviewed_at = now() where id = '${id}'`)).toBe(
+        "This request can no longer be approved because its start time has passed.",
+      );
+      await db.query(`update public.bookings set status = 'denied', denial_reason = 'Start time passed', reviewed_by = '${ADMIN}', reviewed_at = now() where id = '${id}'`);
+    });
+    const closed = (await rows<{ status: string; denial_reason: string; reviewed_by: string }>(`select status, denial_reason, reviewed_by from public.bookings where id = '${id}'`))[0];
+    expect(closed).toEqual({ status: "denied", denial_reason: "Start time passed", reviewed_by: ADMIN });
+  });
+
+  it("treats a start time equal to now as passed", async () => {
+    await db.exec("begin");
+    try {
+      await db.exec("set local session_replication_role = replica");
+      const id = (
+        await rows<{ id: string }>(`insert into public.bookings (user_id, room_id, event_name, event_type, purpose, attendee_count, start_time, end_time)
+          values ('${BOB}', '${roomA}', 'Starting now', 'other', 'Test', 3, now(), now() + interval '30 minutes') returning id`)
+      )[0].id;
+      await db.exec(`set local session_replication_role = origin; set local role app_member; select set_config('app.user_id', '${ADMIN}', true);`);
+      expect(await errorCode(`update public.bookings set status = 'approved' where id = '${id}'`)).toBe("23514");
+    } finally {
+      await db.exec("rollback");
+    }
+  });
+
+  it("lets admins, and only admins, record whether the denial email was sent", async () => {
+    const id = await pastPending(72);
+    const stored = async () => (await rows<{ ghl_notification_error: string | null }>(`select ghl_notification_error from public.bookings where id = '${id}'`))[0].ghl_notification_error;
+    await as(BOB, () => db.query(`update public.bookings set ghl_notification_error = 'x' where id = '${id}'`)); // RLS: no effect
+    expect(await stored()).toBeNull();
+    await as(ADMIN, () => db.query(`update public.bookings set ghl_notification_error = 'GHL is unavailable' where id = '${id}'`));
+    expect(await stored()).toBe("GHL is unavailable");
+  });
+});
+
+describe("admin roles", () => {
+  const DENIED = "66666666-6666-4666-8666-666666666666";
+  const NEWBIE = "77777777-7777-4777-8777-777777777777";
+  const roleOf = async (id: string) => (await rows<{ role: string }>(`select role from public.profiles where id = '${id}'`))[0].role;
+  const isAdmin = async (id: string) => as(id, async () => (await rows<{ yes: boolean }>(`select public.is_admin() as yes`))[0].yes);
+  const latestEvent = async (id: string) =>
+    (
+      await rows<{ change: string; previous_role: string; new_role: string; actor_id: string }>(
+        `select change, previous_role, new_role, actor_id from public.account_access_events where user_id = '${id}' order by created_at desc limit 1`,
+      )
+    )[0];
+
+  beforeAll(async () => {
+    await db.exec(`
+      insert into public.profiles (id, email, full_name) values ('${NEWBIE}', 'newbie@test', 'Newbie');
+      insert into public.profiles (id, email, full_name, access_status, access_reason) values ('${DENIED}', 'denied@test', 'Dee Nied', 'denied', 'Not a member');
+    `);
+  });
+
+  it("never lets a member change a role, including their own", async () => {
+    await as(ALICE, async () => {
+      expect(await errorCode(`select * from public.admin_set_user_role('${ALICE}', 'admin')`)).toBe("42501");
+      expect(await errorCode(`select * from public.admin_set_user_role('${BOB}', 'admin')`)).toBe("42501");
+      expect(await errorCode(`update public.profiles set role = 'admin' where id = '${ALICE}'`)).toBe("42501");
+    });
+    expect(await roleOf(ALICE)).toBe("user");
+  });
+
+  it("only promotes active accounts", async () => {
+    await as(ADMIN, async () => {
+      for (const id of [NEWBIE, DENIED, PENDING /* revoked earlier */]) {
+        expect(await errorMessage(`select * from public.admin_set_user_role('${id}', 'admin')`)).toBe("Only active accounts can be made admins");
+      }
+    });
+    expect([await roleOf(NEWBIE), await roleOf(DENIED), await roleOf(PENDING)]).toEqual(["user", "user", "user"]);
+  });
+
+  it("lets an admin promote an active user, effective immediately, with an audit entry", async () => {
+    await as(ADMIN, async () => {
+      expect((await rows<{ role: string }>(`select * from public.admin_set_user_role('${ALICE}', 'admin')`))[0].role).toBe("admin");
+      expect(await errorMessage(`select * from public.admin_set_user_role('${ALICE}', 'admin')`)).toBe("That user already has this role");
+    });
+    expect(await latestEvent(ALICE)).toEqual({ change: "promoted", previous_role: "user", new_role: "admin", actor_id: ADMIN });
+    expect(await isAdmin(ALICE)).toBe(true);
+  });
+
+  it("lets an admin remove another admin's admin access, effective immediately", async () => {
+    await as(ADMIN, async () => {
+      expect((await rows<{ role: string }>(`select * from public.admin_set_user_role('${ALICE}', 'user')`))[0].role).toBe("user");
+    });
+    expect(await latestEvent(ALICE)).toEqual({ change: "demoted", previous_role: "admin", new_role: "user", actor_id: ADMIN });
+    expect(await isAdmin(ALICE)).toBe(false);
+    await as(ALICE, async () => expect(await errorCode(`select * from public.admin_set_user_role('${BOB}', 'admin')`)).toBe("42501"));
+  });
+
+  it("keeps at least one active admin and never changes an admin's own role or access", async () => {
+    const LAST = "At least one active administrator must remain.";
+    await as(ADMIN, async () => {
+      // The only active admin can't step down, be revoked, or be demoted.
+      expect(await errorMessage(`select * from public.admin_set_user_role('${ADMIN}', 'user')`)).toBe(LAST);
+      expect(await errorMessage(`select * from public.admin_set_user_access('${ADMIN}', 'revoked', 'oops')`)).toBe(LAST);
+
+      // With a second admin, self-changes are still refused (another admin has to do it).
+      await db.query(`select * from public.admin_set_user_role('${BOB}', 'admin')`);
+      expect(await errorMessage(`select * from public.admin_set_user_role('${ADMIN}', 'user')`)).toBe("Admins cannot change their own role");
+      expect(await errorMessage(`select * from public.admin_set_user_access('${ADMIN}', 'revoked', 'oops')`)).toBe("Admins cannot change their own access");
+      await db.query(`select * from public.admin_set_user_role('${BOB}', 'user')`);
+    });
+    expect([await roleOf(ADMIN), await roleOf(BOB)]).toEqual(["admin", "user"]);
+  });
+
+  it("keeps role changes out of access-email bookkeeping", async () => {
+    await as(ADMIN, () => db.query(`select public.admin_set_access_notification('${ALICE}', 'GHL down')`));
+    const events = await rows<{ change: string; notification_error: string | null }>(
+      `select change, notification_error from public.account_access_events where user_id = '${ALICE}' order by created_at desc`,
+    );
+    expect(events.filter((e) => e.change === "promoted" || e.change === "demoted").every((e) => e.notification_error === null)).toBe(true);
   });
 });

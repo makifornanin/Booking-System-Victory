@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { SessionUser } from "@/lib/auth/provider";
 import { RepositoryError, type Repository } from "@/lib/data/repository";
-import type { AccessChange, AccessStatus, Profile } from "@/lib/data/types";
+import type { AccessChange, AccessEvent, AccessStatus, Profile } from "@/lib/data/types";
 import { ghlUserMessage } from "@/lib/ghl/errors";
 import { ACCOUNT_TAGS, PENDING_ACCOUNT_TAG, type CalendarGateway, type ContactFieldValues } from "@/lib/ghl/gateway";
 import { syncGhlContact, type ContactOwner } from "@/lib/services/ghl-contact";
@@ -140,7 +140,8 @@ export async function retryAccessNotification(rawInput: unknown, actor: SessionU
   if (!parsed.success) return failure("invalid", "Unknown user.");
 
   const [profile, events] = await Promise.all([deps.repo.getProfile(parsed.data.userId), deps.repo.listAccessEvents(parsed.data.userId)]);
-  const latest = events[0];
+  // Role changes send no email; the latest access decision is what gets re-sent.
+  const latest = events.find((event): event is AccessEvent & { change: AccessChange } => event.change in ACCOUNT_TAGS);
   if (!profile) return failure("not_found", "We couldn't find that user.");
   if (!latest && profile.accessStatus !== "pending") return failure("not_found", "There's no access change to notify about.");
 
@@ -149,4 +150,33 @@ export async function retryAccessNotification(rawInput: unknown, actor: SessionU
     : await notifyPendingAccount(profile, { calendar: deps.calendar, saveGhlContactId: (userId, contactId) => deps.repo.saveGhlContactId(userId, contactId) });
   await recordNotification(deps, profile.id, notificationError);
   return notificationError ? failure("calendar_error", `The notification failed again: ${notificationError}`) : success(undefined, "Notification sent.");
+}
+
+const roleChangeSchema = z.object({ userId: z.uuid(), role: z.enum(["user", "admin"]) });
+
+/**
+ * Makes an active member an admin, or removes another admin's admin access. The
+ * database enforces the rules (active admins only, never your own role, active
+ * accounts only, at least one active admin) and records the change in the
+ * access history. Roles are read from the database on every request, so the
+ * change applies on the person's next page load.
+ */
+export async function changeRole(rawInput: unknown, actor: SessionUser | null, deps: Pick<AccountDeps, "repo">): Promise<ServiceResult<{ profile: Profile }>> {
+  if (!actor) return failure("unauthenticated", "Your session has expired. Please sign in again.");
+  if (actor.accessStatus !== "active" || actor.role !== "admin") return failure("forbidden", "Only admins can change roles.");
+  const parsed = roleChangeSchema.safeParse(rawInput);
+  if (!parsed.success) return failure("invalid", "Unknown user or role.");
+  const { userId, role } = parsed.data;
+
+  let profile: Profile | null;
+  try {
+    profile = await deps.repo.setUserRole(userId, role);
+  } catch (error) {
+    if (error instanceof RepositoryError && (error.code === "invalid" || error.code === "forbidden")) return failure(error.code, error.message);
+    console.error("[accounts] role change failed", error instanceof Error ? error.message : error);
+    return failure("unknown", "The role change couldn't be saved. Please try again.");
+  }
+  if (!profile) return failure("not_found", "We couldn't find that user.");
+  const name = profile.fullName || profile.email;
+  return success({ profile }, role === "admin" ? `${name} is now an admin.` : `${name} no longer has admin access.`);
 }

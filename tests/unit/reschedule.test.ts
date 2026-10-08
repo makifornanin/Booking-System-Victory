@@ -202,6 +202,15 @@ describe("denying a reschedule", () => {
     expect(await denyReschedule({ requestId, reason: "" }, admin, deps(adminRepo))).toMatchObject({ ok: false, code: "invalid" });
   });
 
+  it("is saved even when GHL fails, and the email failure is recorded for a retry", async () => {
+    const { booking, requestId } = await pendingRequest();
+    const failing = fakeGhl({ day: DAY, contactsDown: true });
+    const result = await denyReschedule({ requestId, reason: "Room A is booked for a seminar." }, admin, deps(adminRepo, { calendar: failing.gateway }));
+    expect(result).toMatchObject({ ok: true, data: { notificationFailed: true }, message: "Reschedule denied, but the notification could not be sent." });
+    expect(await adminRepo.getRescheduleRequest(requestId)).toMatchObject({ status: "denied", denialReason: "Room A is booked for a seminar.", notificationError: expect.any(String) });
+    expect(await adminRepo.getBookingDetails(booking.id)).toMatchObject({ status: "approved", startTime: booking.startTime });
+  });
+
   it("writes the requested details and reason, then the denied tag", async () => {
     const { requestId } = await pendingRequest();
     await denyReschedule({ requestId, reason: "Room A is booked for a seminar." }, admin, deps(adminRepo));

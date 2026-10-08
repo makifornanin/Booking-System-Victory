@@ -143,6 +143,7 @@ export function createDemoSeed(): DemoState {
     statusNotificationStatus: null,
     statusNotificationError: null,
     statusNotifiedAt: null,
+    ghlNotificationError: null,
     reviewedBy: fields.status === "approved" || fields.status === "denied" ? ids.admin : null,
     reviewedAt: fields.status === "approved" || fields.status === "denied" ? nowIso : null,
     reviewLockedAt: null,

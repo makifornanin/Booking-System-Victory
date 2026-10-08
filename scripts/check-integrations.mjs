@@ -63,9 +63,9 @@ await check("Rooms linked to GHL calendars", async () => {
   return "5/5";
 });
 await check("Admin account", async () => {
-  const { rows } = await db.query("select count(*)::int as n from public.profiles where role = 'admin'");
-  if (rows[0].n === 0) throw new Error("no admin yet — sign up with ADMIN_EMAIL, then run npm run db:bootstrap-admin");
-  return `${rows[0].n} admin(s)`;
+  const { rows } = await db.query("select count(*)::int as n from public.profiles where role = 'admin' and access_status = 'active'");
+  if (rows[0].n === 0) throw new Error("no active admin yet — sign up with ADMIN_EMAIL, then run npm run db:bootstrap-admin");
+  return `${rows[0].n} active admin(s)`;
 });
 // The WhatsApp assistant identifies members by phone, so one number must map to one account.
 await db
@@ -75,6 +75,11 @@ await db
     else warn("Unique phone numbers (WhatsApp identity)", `${rows[0].n} number(s) shared by several accounts; the bot answers PHONE_AMBIGUOUS for them until one account's number is changed`);
   })
   .catch((error) => fail("Unique phone numbers (WhatsApp identity)", error.message));
+// A member whose GHL contact is known, to confirm phone lookups find it (nothing is printed).
+const knownContact = await db
+  .query("select phone, ghl_contact_id from public.profiles where phone is not null and ghl_contact_id is not null order by created_at limit 1")
+  .then((r) => r.rows[0] ?? null)
+  .catch(() => null);
 await db.end().catch(() => undefined);
 
 // --- Neon Auth ------------------------------------------------------------
@@ -148,6 +153,12 @@ if (!env.GHL_PRIVATE_INTEGRATION_TOKEN || !env.GHL_LOCATION_ID) {
     const query = new URLSearchParams({ locationId: env.GHL_LOCATION_ID, email: "booking-system-healthcheck@example.com" });
     const body = await ghl(`/contacts/search/duplicate?${query}`, "2021-07-28");
     return body && "contact" in body ? `responds (match: ${body.contact ? "yes" : "none"})` : "responds";
+  });
+  await check("GHL contact lookup by phone", async () => {
+    const query = new URLSearchParams({ locationId: env.GHL_LOCATION_ID, number: knownContact?.phone ?? "+639000000000" });
+    const body = await ghl(`/contacts/search/duplicate?${query}`, "2021-07-28");
+    if (!knownContact) return "responds (no known contact to match)";
+    return body?.contact?.id === knownContact.ghl_contact_id ? "finds a known member's contact by phone" : `responds (match: ${body?.contact ? "a different contact" : "none"})`;
   });
   await check("GHL booking custom fields", async () => {
     const { customFields } = await ghl(`/locations/${encodeURIComponent(env.GHL_LOCATION_ID)}/customFields?model=contact`, "2021-07-28");

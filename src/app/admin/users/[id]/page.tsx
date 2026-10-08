@@ -4,11 +4,11 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, ShieldCheck } from "lucide-react";
 import { requireAdmin } from "@/lib/auth/session";
 import { getRepositoryForRequest } from "@/lib/data/queries";
-import type { AccessChange } from "@/lib/data/types";
+import type { AccessEvent } from "@/lib/data/types";
 import { formatPhone } from "@/lib/domain/phone";
 import { formatDate } from "@/lib/domain/time";
 import { parseUuid } from "@/lib/validation/params";
-import { AccessActions, RetryNotificationButton } from "@/components/admin/access-actions";
+import { AccessActions, RetryNotificationButton, RoleAction } from "@/components/admin/access-actions";
 import { SummaryList } from "@/components/admin/summary-list";
 import { BookingRow } from "@/components/bookings/booking-row";
 import { Avatar } from "@/components/shell/account-link";
@@ -18,7 +18,14 @@ import { AccessStatusMark } from "@/components/ui/status";
 
 export const metadata: Metadata = { title: "User" };
 
-const changeLabels: Record<AccessChange, string> = { approved: "Approved", denied: "Denied", revoked: "Access revoked", restored: "Access restored" };
+const changeLabels: Record<AccessEvent["change"], string> = {
+  approved: "Approved",
+  denied: "Denied",
+  revoked: "Access revoked",
+  restored: "Access restored",
+  promoted: "Made admin",
+  demoted: "Admin access removed",
+};
 
 export default async function AdminUserPage({ params }: PageProps<"/admin/users/[id]">) {
   const admin = await requireAdmin();
@@ -56,9 +63,12 @@ export default async function AdminUserPage({ params }: PageProps<"/admin/users/
           </div>
         </div>
         {isSelf ? (
-          <p className="text-sm text-muted">This is your account. Another admin manages your access.</p>
+          <p className="text-sm text-muted">This is your account. Another admin manages your access and role.</p>
         ) : (
-          <AccessActions userId={profile.id} userName={name} status={profile.accessStatus} />
+          <div className="flex flex-wrap items-center gap-2">
+            {(profile.accessStatus === "active" || profile.role === "admin") && <RoleAction userId={profile.id} userName={name} role={profile.role} />}
+            <AccessActions userId={profile.id} userName={name} status={profile.accessStatus} />
+          </div>
         )}
       </header>
 

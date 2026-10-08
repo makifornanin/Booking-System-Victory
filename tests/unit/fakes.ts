@@ -23,6 +23,8 @@ export interface FakeGhlOptions {
   day?: string;
   failCreate?: boolean | GhlError;
   failContactUpdate?: boolean;
+  /** Every contact call fails as if GHL were down. */
+  contactsDown?: boolean;
   failTag?: boolean;
   failMove?: boolean;
   blocked?: { from: string; to: string }[];
@@ -66,6 +68,7 @@ export function fakeGhl(options: FakeGhlOptions = {}) {
       return starts;
     },
     async findOrCreateContact(person) {
+      if (options.contactsDown) throw new GhlError("unavailable", "GHL down");
       log.searches++;
       const key = person.email.toLowerCase();
       if (!log.contacts.has(key)) log.contacts.set(key, { id: `contact-${log.contacts.size + 1}`, tags: [], person });
@@ -73,6 +76,7 @@ export function fakeGhl(options: FakeGhlOptions = {}) {
       return { id: contact.id, tags: contact.tags };
     },
     async updateContact(contactId, update) {
+      if (options.contactsDown) throw new GhlError("unavailable", "GHL down");
       if (options.failContactUpdate) throw new GhlError("rejected", "field not found");
       if (![...log.contacts.values()].some((c) => c.id === contactId)) throw new GhlError("not_found", "contact not found");
       log.updates.push({ contactId, ...update });

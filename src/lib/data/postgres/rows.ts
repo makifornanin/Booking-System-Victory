@@ -10,6 +10,7 @@ import type {
   RescheduleRequest,
   RescheduleStatus,
   Role,
+  RoleChange,
   Room,
   UserSummary,
 } from "@/lib/data/types";
@@ -64,6 +65,7 @@ export interface BookingRow {
   ghl_appointment_id: string | null;
   google_calendar_event_id: string | null;
   google_calendar_sync_error: string | null;
+  ghl_notification_error: string | null;
   source: string;
   whatsapp_message_id: string | null;
   status_notification_status: string | null;
@@ -92,8 +94,10 @@ export interface BookingDetailsRow extends BookingWithRoomRow {
 
 export interface AccessEventRow {
   id: string;
-  change: AccessChange;
+  change: AccessChange | RoleChange;
   reason: string | null;
+  previous_role: Role | null;
+  new_role: Role | null;
   actor_name: string | null;
   notification_error: string | null;
   notified_at: Timestamp | null;
@@ -153,6 +157,8 @@ export function toAccessEvent(row: AccessEventRow): AccessEvent {
     id: row.id,
     change: row.change,
     reason: row.reason,
+    previousRole: row.previous_role ?? null,
+    newRole: row.new_role ?? null,
     actorName: row.actor_name,
     notificationError: row.notification_error,
     notifiedAt: isoOrNull(row.notified_at),
@@ -194,6 +200,7 @@ export function toBooking(row: BookingRow): Booking {
     ghlAppointmentId: row.ghl_appointment_id,
     googleCalendarEventId: row.google_calendar_event_id,
     googleCalendarSyncError: row.google_calendar_sync_error,
+    ghlNotificationError: row.ghl_notification_error ?? null,
     source: row.source === "whatsapp" ? "whatsapp" : "web",
     whatsappMessageId: row.whatsapp_message_id ?? null,
     statusNotificationStatus: row.status_notification_status ?? null,

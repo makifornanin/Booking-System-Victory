@@ -3,8 +3,8 @@
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { RefreshCw } from "lucide-react";
-import { changeAccessAction, retryAccessNotificationAction, type AccessActionState } from "@/app/actions/accounts";
-import type { AccessStatus } from "@/lib/data/types";
+import { changeAccessAction, changeRoleAction, retryAccessNotificationAction, type AccessActionState } from "@/app/actions/accounts";
+import type { AccessStatus, Role } from "@/lib/data/types";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { describedBy, Field, Textarea } from "@/components/ui/field";
@@ -130,5 +130,83 @@ export function RetryNotificationButton({ userId }: { userId: string }) {
       <RefreshCw className="size-3.5" aria-hidden />
       Retry email
     </Button>
+  );
+}
+
+const ADMIN_POWERS = ["Review and approve new accounts", "Approve and deny booking requests", "Manage booking and reschedule requests", "Manage announcements"];
+
+/** "Make admin" / "Remove admin access" with a confirmation. The server and database re-check every rule. */
+export function RoleAction({ userId, userName, role, compact }: { userId: string; userName: string; role: Role; compact?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const promote = role !== "admin";
+
+  function confirm() {
+    setError(null);
+    startTransition(async () => {
+      const result = await changeRoleAction(userId, promote ? "admin" : "user");
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      toast.success(result.message);
+      setOpen(false);
+    });
+  }
+
+  return (
+    <>
+      <Button
+        size={compact ? "sm" : "md"}
+        variant={compact ? "quiet" : promote ? "secondary" : "danger-quiet"}
+        onClick={() => {
+          setError(null);
+          setOpen(true);
+        }}
+      >
+        {promote ? "Make admin" : "Remove admin access"}
+      </Button>
+
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        locked={pending}
+        title={promote ? "Make this user an admin?" : "Remove admin access?"}
+        description={userName}
+        size="sm"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setOpen(false)} disabled={pending}>
+              Cancel
+            </Button>
+            <Button variant={promote ? "primary" : "danger"} onClick={confirm} busy={pending} busyLabel={promote ? "Saving…" : "Removing…"}>
+              {promote ? "Make admin" : "Remove admin access"}
+            </Button>
+          </>
+        }
+      >
+        {promote ? (
+          <div className="text-sm leading-relaxed text-ink-soft">
+            <p>Admins can:</p>
+            <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
+              {ADMIN_POWERS.map((power) => (
+                <li key={power}>{power}</li>
+              ))}
+            </ul>
+            <p className="mt-3 text-muted">It applies the next time they open a page.</p>
+          </div>
+        ) : (
+          <p className="text-sm leading-relaxed text-ink-soft">
+            They keep their member account and bookings but can no longer open the admin area. It applies the next time they open a page.
+          </p>
+        )}
+        {error && (
+          <Notice tone="error" className="mt-4">
+            {error}
+          </Notice>
+        )}
+      </Dialog>
+    </>
   );
 }

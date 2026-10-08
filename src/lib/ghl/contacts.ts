@@ -2,7 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { getGhlEnv } from "@/lib/env";
 import { GHL_API_VERSION, ghlRequest } from "@/lib/ghl/client";
-import { GhlError } from "@/lib/ghl/errors";
+import { GhlError, isDuplicateContactError } from "@/lib/ghl/errors";
 import { toCustomFieldPayload, type ContactFieldValues } from "@/lib/ghl/fields";
 
 export interface GhlPerson {
@@ -17,7 +17,7 @@ export interface GhlContactRef {
   tags: string[] | null;
 }
 
-const contactSchema = z.object({ id: z.string().min(1), email: z.string().nullish(), tags: z.array(z.string()).nullish() }).loose();
+const contactSchema = z.object({ id: z.string().min(1), email: z.string().nullish(), phone: z.string().nullish(), tags: z.array(z.string()).nullish() }).loose();
 const duplicateSearchSchema = z.object({ contact: contactSchema.nullish() }).loose();
 const createdSchema = z.object({ contact: contactSchema }).loose();
 const tagsSchema = z.object({ tags: z.array(z.string()).nullish() }).loose();
@@ -29,45 +29,68 @@ function nameParts(fullName: string) {
   return { firstName: firstName || undefined, lastName: rest.join(" ") || undefined, name: fullName.trim() || undefined };
 }
 
-export async function findContactByEmail(email: string): Promise<GhlContactRef | null> {
+async function searchDuplicate(query: { email: string } | { number: string }) {
   const { GHL_LOCATION_ID } = getGhlEnv();
   const { contact } = await ghlRequest("/contacts/search/duplicate", {
     version: GHL_API_VERSION.contacts,
-    query: { locationId: GHL_LOCATION_ID, email },
+    query: { locationId: GHL_LOCATION_ID, ...query },
     schema: duplicateSearchSchema,
   });
-  if (!contact) return null;
+  return contact ?? null;
+}
+
+const sameEmail = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+const digits = (phone: string) => phone.replace(/\D/g, "");
+
+export async function findContactByEmail(email: string): Promise<GhlContactRef | null> {
+  const contact = await searchDuplicate({ email });
   // Duplicate search can match on other fields depending on location settings; only accept an email match.
-  if (contact.email && contact.email.toLowerCase() !== email.toLowerCase()) return null;
+  return contact && (!contact.email || sameEmail(contact.email, email)) ? toRef(contact) : null;
+}
+
+/**
+ * Deterministic lookup: email first, then the E.164 phone. A phone match is only
+ * used when that contact has no email or the same one; otherwise the phone belongs
+ * to someone else, whose inbox must not get this person's notifications.
+ */
+async function lookupContact(person: GhlPerson): Promise<{ contact: GhlContactRef | null; phoneTaken: boolean }> {
+  const byEmail = await findContactByEmail(person.email);
+  if (byEmail || !person.phone) return { contact: byEmail, phoneTaken: false };
+  const byPhone = await searchDuplicate({ number: person.phone });
+  if (!byPhone || (byPhone.phone && digits(byPhone.phone) !== digits(person.phone))) return { contact: null, phoneTaken: false };
+  if (byPhone.email && !sameEmail(byPhone.email, person.email)) return { contact: null, phoneTaken: true };
+  return { contact: toRef(byPhone), phoneTaken: false };
+}
+
+async function createContact(person: GhlPerson, phone: string | undefined): Promise<GhlContactRef> {
+  const { GHL_LOCATION_ID } = getGhlEnv();
+  const { contact } = await ghlRequest("/contacts/", {
+    method: "POST",
+    version: GHL_API_VERSION.contacts,
+    body: { locationId: GHL_LOCATION_ID, email: person.email, ...nameParts(person.fullName), phone, source: "Victory room booking" },
+    schema: createdSchema,
+  });
   return toRef(contact);
 }
 
-/** Finds the contact by email, creating it only when none exists (no duplicates). */
+/**
+ * The one place a GHL contact is resolved: by email, then phone, creating it only
+ * when neither exists. If GHL still rejects the create (a concurrent create, or
+ * its own duplicate matching), the lookup runs again instead of failing.
+ */
 export async function findOrCreateContact(person: GhlPerson): Promise<GhlContactRef> {
-  const existing = await findContactByEmail(person.email);
-  if (existing) return existing;
+  const found = await lookupContact(person);
+  if (found.contact) return found.contact;
 
-  const { GHL_LOCATION_ID } = getGhlEnv();
+  // A phone already held by another person's contact is left off, so this email still gets its own contact.
+  const phone = found.phoneTaken ? undefined : (person.phone ?? undefined);
   try {
-    const { contact } = await ghlRequest("/contacts/", {
-      method: "POST",
-      version: GHL_API_VERSION.contacts,
-      body: {
-        locationId: GHL_LOCATION_ID,
-        email: person.email,
-        ...nameParts(person.fullName),
-        phone: person.phone ?? undefined,
-        source: "Victory room booking",
-      },
-      schema: createdSchema,
-    });
-    return toRef(contact);
+    return await createContact(person, phone);
   } catch (error) {
-    // A concurrent request may have created the contact first; use it instead of failing.
-    if (error instanceof GhlError && error.kind === "rejected") {
-      const created = await findContactByEmail(person.email);
-      if (created) return created;
-    }
+    if (!(error instanceof GhlError && error.kind === "rejected")) throw error;
+    const again = await lookupContact(person);
+    if (again.contact) return again.contact;
+    if (phone && isDuplicateContactError(error)) return createContact(person, undefined);
     throw error;
   }
 }
@@ -83,12 +106,17 @@ export async function updateContact(contactId: string, update: { person?: GhlPer
     body.customFields = await toCustomFieldPayload(update.fields);
   }
   if (Object.keys(body).length === 0) return;
-  await ghlRequest(`/contacts/${encodeURIComponent(contactId)}`, {
-    method: "PUT",
-    version: GHL_API_VERSION.contacts,
-    body,
-    schema: z.unknown(),
-  });
+  const put = (payload: Record<string, unknown>) =>
+    ghlRequest(`/contacts/${encodeURIComponent(contactId)}`, { method: "PUT", version: GHL_API_VERSION.contacts, body: payload, schema: z.unknown() });
+  try {
+    await put(body);
+  } catch (error) {
+    // The phone already belongs to another contact: keep this contact's phone and update the rest.
+    if (!isDuplicateContactError(error) || !("phone" in body)) throw error;
+    const rest = { ...body };
+    delete rest.phone;
+    if (Object.keys(rest).length > 0) await put(rest);
+  }
 }
 
 /** Removes a tag if the contact may have it (unknown tags are removed to be safe). */

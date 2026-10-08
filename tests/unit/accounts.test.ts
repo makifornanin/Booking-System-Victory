@@ -3,9 +3,11 @@ import type { Repository } from "@/lib/data/repository";
 import { createDemoRepository } from "@/lib/demo/repository";
 import { normalizePhone, formatPhone } from "@/lib/domain/phone";
 import { PENDING_ACCOUNT_TAG } from "@/lib/ghl/gateway";
-import { changeAccess, notifyPendingAccount, retryAccessNotification } from "@/lib/services/accounts";
+import type { SessionUser } from "@/lib/auth/provider";
+import { INACTIVE_PROMOTION_MESSAGE, LAST_ADMIN_MESSAGE, OWN_ROLE_MESSAGE } from "@/lib/domain/roles";
+import { changeAccess, changeRole, notifyPendingAccount, retryAccessNotification } from "@/lib/services/accounts";
 import { signUpSchema } from "@/lib/validation/auth";
-import { admin, fakeGhl, member, pendingUserId } from "./fakes";
+import { admin, fakeGhl, member, otherMember, pendingUserId } from "./fakes";
 
 let adminRepo: Repository;
 
@@ -154,5 +156,79 @@ describe("new account pending review (GHL)", () => {
     const result = await retryAccessNotification({ userId: pendingUserId }, admin, { repo: adminRepo, calendar: ghl.gateway });
     expect(result.ok).toBe(true);
     expect(ghl.log.tags).toEqual([{ contactId: "contact-1", tag: PENDING_ACCOUNT_TAG }]);
+  });
+});
+
+describe("admin roles", () => {
+  /** What the auth provider builds on every request: the role comes from the database. */
+  async function sessionFor(id: string): Promise<SessionUser> {
+    const p = (await adminRepo.getProfile(id))!;
+    return { id: p.id, email: p.email, fullName: p.fullName, phone: p.phone, role: p.role, accessStatus: p.accessStatus, accessReason: p.accessReason };
+  }
+  const promote = (userId: string, actor: SessionUser = admin) => changeRole({ userId, role: "admin" }, actor, { repo: createDemoRepository(actor.id) });
+  const demote = (userId: string, actor: SessionUser = admin) => changeRole({ userId, role: "user" }, actor, { repo: createDemoRepository(actor.id) });
+  const approvePending = async (actor: SessionUser) =>
+    changeAccess({ userId: pendingUserId, action: "approve" }, actor, { repo: createDemoRepository(actor.id), calendar: fakeGhl().gateway });
+
+  it("an admin promotes an active member, who has admin powers on their next request", async () => {
+    expect(await promote(member.id)).toMatchObject({ ok: true, message: "Jamie Cruz is now an admin." });
+    const promoted = await sessionFor(member.id);
+    expect(promoted.role).toBe("admin");
+    expect(await approvePending(promoted)).toMatchObject({ ok: true });
+  });
+
+  it("an admin removes another admin's access, who loses admin powers right away", async () => {
+    await promote(member.id);
+    expect(await demote(member.id)).toMatchObject({ ok: true, message: "Jamie Cruz no longer has admin access." });
+    const demoted = await sessionFor(member.id);
+    expect(demoted.role).toBe("user");
+    expect(await approvePending(demoted)).toMatchObject({ ok: false, code: "forbidden" });
+    expect(await promote(otherMember.id, demoted)).toMatchObject({ ok: false, code: "forbidden" });
+  });
+
+  it("members can't change any role, including their own, whatever the payload says", async () => {
+    expect(await promote(member.id, member)).toMatchObject({ ok: false, code: "forbidden" });
+    expect(await promote(otherMember.id, member)).toMatchObject({ ok: false, code: "forbidden" });
+    expect(await changeRole({ userId: member.id, role: "admin", actorRole: "admin" }, member, { repo: createDemoRepository(member.id) })).toMatchObject({
+      ok: false,
+      code: "forbidden",
+    });
+    // Even a forged session can't get past the data layer, which checks the stored role.
+    await expect(createDemoRepository(member.id).setUserRole(member.id, "admin")).rejects.toMatchObject({ code: "forbidden" });
+    expect((await adminRepo.getProfile(member.id))?.role).toBe("user");
+    expect(await changeRole({ userId: member.id, role: "superadmin" }, admin, { repo: adminRepo })).toMatchObject({ ok: false, code: "invalid" });
+  });
+
+  it("only active accounts can be promoted", async () => {
+    expect(await promote(pendingUserId)).toMatchObject({ ok: false, code: "invalid", error: INACTIVE_PROMOTION_MESSAGE });
+    await changeAccess({ userId: otherMember.id, action: "revoke", reason: "Moved away" }, admin, { repo: adminRepo, calendar: fakeGhl().gateway });
+    expect(await promote(otherMember.id)).toMatchObject({ ok: false, error: INACTIVE_PROMOTION_MESSAGE });
+    await changeAccess({ userId: pendingUserId, action: "deny", reason: "Not a member" }, admin, { repo: adminRepo, calendar: fakeGhl().gateway });
+    expect(await promote(pendingUserId)).toMatchObject({ ok: false, error: INACTIVE_PROMOTION_MESSAGE });
+  });
+
+  it("the last active admin can't be demoted or lose access by revoke", async () => {
+    expect(await demote(admin.id)).toMatchObject({ ok: false, code: "invalid", error: LAST_ADMIN_MESSAGE });
+    expect(await changeAccess({ userId: admin.id, action: "revoke", reason: "Leaving" }, admin, { repo: adminRepo, calendar: fakeGhl().gateway })).toMatchObject({
+      ok: false,
+      error: LAST_ADMIN_MESSAGE,
+    });
+    // With a second admin, nobody changes their own role from the Users screen.
+    await promote(member.id);
+    expect(await demote(admin.id)).toMatchObject({ ok: false, error: OWN_ROLE_MESSAGE });
+    expect((await adminRepo.getProfile(admin.id))?.role).toBe("admin");
+  });
+
+  it("records role changes in the access history, separate from access emails", async () => {
+    const ghl = fakeGhl({ failTag: true });
+    await changeAccess({ userId: pendingUserId, action: "approve" }, admin, { repo: adminRepo, calendar: ghl.gateway });
+    await promote(pendingUserId);
+    const [latest] = await adminRepo.listAccessEvents(pendingUserId);
+    expect(latest).toMatchObject({ change: "promoted", previousRole: "user", newRole: "admin", actorName: "Andrea Santos", notificationError: null });
+
+    // Retrying the failed email re-sends the approval, not anything about the role.
+    const working = fakeGhl();
+    expect(await retryAccessNotification({ userId: pendingUserId }, admin, { repo: adminRepo, calendar: working.gateway })).toMatchObject({ ok: true });
+    expect(working.log.tags).toEqual([{ contactId: "contact-1", tag: "booking-system-user-approved" }]);
   });
 });

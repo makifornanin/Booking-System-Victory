@@ -34,6 +34,9 @@ export default async function AdminReschedulePage({ params }: PageProps<"/admin/
   const current = `${formatDate(request.originalStart, "EEE d MMM")} · ${formatTimeRange(request.originalStart, request.originalEnd)}`;
   const requested = `${formatDate(request.requestedStart, "EEE d MMM")} · ${formatTimeRange(request.requestedStart, request.requestedEnd)}`;
   const status = STATUS[request.status];
+  // The requested time (or the booking itself) has started: the move can no longer be approved.
+  const now = new Date().getTime();
+  const pastDue = request.status === "pending" && Math.min(new Date(request.requestedStart).getTime(), new Date(request.originalStart).getTime()) <= now;
 
   return (
     <div className="space-y-8">
@@ -47,7 +50,7 @@ export default async function AdminReschedulePage({ params }: PageProps<"/admin/
           <p className="eyebrow text-[10px] text-accent-ink">Reschedule</p>
           <h1 className="title mt-1 text-3xl">{booking.eventName}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[15px] text-muted">
-            <StatusMark tone={status.tone} label={status.label} />
+            <StatusMark tone={pastDue ? "cancelled" : status.tone} label={pastDue ? "Past due" : status.label} />
             <span>
               {booking.room.name} · {booking.requester.fullName}
             </span>
@@ -56,11 +59,17 @@ export default async function AdminReschedulePage({ params }: PageProps<"/admin/
         {request.status === "pending" && (
           <RescheduleReviewActions
             requestId={request.id}
+            pastDue={pastDue}
             summary={{ event: booking.eventName, room: booking.room.name, current, requested, requester: `${booking.requester.fullName} (${booking.requester.email})` }}
           />
         )}
       </header>
 
+      {pastDue && (
+        <Notice tone="warning" title="Past due">
+          This request can no longer be approved because its start time has passed. Closing it keeps the original booking as it is.
+        </Notice>
+      )}
       {request.status === "denied" && request.denialReason && (
         <Notice tone="error" title="Denial reason">
           {request.denialReason}. The original booking stayed confirmed.

@@ -5,7 +5,8 @@ import { PENDING_LIMIT_MESSAGE, RepositoryError, type ImageStorage, type Reposit
 import type { AccessChange, AccessStatus, Announcement, Booking, BookingDetails, BookingWithRoom, Profile, RescheduleRequest, RescheduleStatus } from "@/lib/data/types";
 import type { BookingStatus } from "@/lib/domain/booking-rules";
 import { rangesOverlap, toRange } from "@/lib/domain/availability";
-import { isBlockingStatus, validateBookingWindow } from "@/lib/domain/booking-rules";
+import { isBlockingStatus, PAST_DUE_MESSAGE, validateBookingWindow } from "@/lib/domain/booking-rules";
+import { INACTIVE_PROMOTION_MESSAGE, LAST_ADMIN_MESSAGE, OWN_ROLE_MESSAGE, SAME_ROLE_MESSAGE } from "@/lib/domain/roles";
 import { isLive } from "@/lib/domain/announcements";
 import { getDemoState, type DemoState, type DemoUser } from "@/lib/demo/store";
 
@@ -67,6 +68,8 @@ const copy = <T>(value: T): T => structuredClone(value);
 export function createDemoRepository(actorId: string | null = null): Repository {
   const state = getDemoState();
   const actorIsAdminNow = () => state.users.find((u) => u.id === actorId)?.role === "admin";
+  const actorIsActiveAdmin = () => state.users.some((u) => u.id === actorId && u.role === "admin" && u.accessStatus === "active");
+  const otherActiveAdmin = (userId: string) => state.users.some((u) => u.id !== userId && u.role === "admin" && u.accessStatus === "active");
   /** Mirrors RLS: members see their own requests, admins see all. */
   const visibleRequest = (r: RescheduleRequest) => actorIsAdminNow() || r.requestedBy === actorId;
   const pendingHolds = (roomId: string, excludeId?: string) => state.reschedules.filter((r) => r.roomId === roomId && r.status === "pending" && r.id !== excludeId);
@@ -99,13 +102,17 @@ export function createDemoRepository(actorId: string | null = null): Repository 
     },
 
     async listAccessEvents(userId) {
-      return state.accessEvents
+      // Newest first; events in the same millisecond keep their insertion order (the sort is stable).
+      return [...state.accessEvents]
+        .reverse()
         .filter((event) => event.userId === userId)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .map((event) => ({
           id: event.id,
           change: event.change,
           reason: event.reason,
+          previousRole: event.previousRole ?? null,
+          newRole: event.newRole ?? null,
           actorName: state.users.find((u) => u.id === event.actorId)?.fullName ?? null,
           notificationError: event.notificationError,
           notifiedAt: event.notifiedAt,
@@ -114,11 +121,14 @@ export function createDemoRepository(actorId: string | null = null): Repository 
     },
 
     async setUserAccess(userId, status, reason) {
-      if (userId === actorId) throw new RepositoryError("invalid", "You can't change your own access.");
       const user = state.users.find((u) => u.id === userId);
       if (!user) return null;
       const change = accessChange(user.accessStatus, status);
       if (!change) throw new RepositoryError("invalid", "That access change isn't allowed from the user's current status.");
+      if (user.role === "admin" && user.accessStatus === "active" && status !== "active" && !otherActiveAdmin(userId)) {
+        throw new RepositoryError("invalid", LAST_ADMIN_MESSAGE);
+      }
+      if (userId === actorId) throw new RepositoryError("invalid", "You can't change your own access.");
       const needsReason = status === "denied" || status === "revoked";
       if (needsReason && !reason?.trim()) throw new RepositoryError("invalid", "Some details were not accepted.");
       const now = new Date().toISOString();
@@ -141,10 +151,39 @@ export function createDemoRepository(actorId: string | null = null): Repository 
       return copy(toProfile(user));
     },
 
+    // Mirrors public.admin_set_user_role.
+    async setUserRole(userId, role) {
+      if (!actorIsActiveAdmin()) throw new RepositoryError("forbidden", "You do not have permission to do that.");
+      const user = state.users.find((u) => u.id === userId);
+      if (!user) return null;
+      if (user.role === role) throw new RepositoryError("invalid", SAME_ROLE_MESSAGE);
+      if (role === "admin" && user.accessStatus !== "active") throw new RepositoryError("invalid", INACTIVE_PROMOTION_MESSAGE);
+      if (role === "user" && user.accessStatus === "active" && !otherActiveAdmin(userId)) throw new RepositoryError("invalid", LAST_ADMIN_MESSAGE);
+      if (userId === actorId) throw new RepositoryError("invalid", OWN_ROLE_MESSAGE);
+      state.accessEvents.push({
+        id: randomUUID(),
+        userId,
+        change: role === "admin" ? "promoted" : "demoted",
+        reason: null,
+        previousRole: user.role,
+        newRole: role,
+        actorId,
+        notificationError: null,
+        notifiedAt: null,
+        createdAt: new Date().toISOString(),
+      });
+      user.role = role;
+      return copy(toProfile(user));
+    },
+
     async setAccessNotificationResult(userId, error) {
       const user = state.users.find((u) => u.id === userId);
       if (user) user.accessNotificationError = error;
-      const latest = state.accessEvents.filter((e) => e.userId === userId).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      // Notifications belong to access decisions, not role changes.
+      const latest = [...state.accessEvents]
+        .reverse()
+        .filter((e) => e.userId === userId && e.change !== "promoted" && e.change !== "demoted")
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
       if (latest) {
         latest.notificationError = error;
         if (!error) latest.notifiedAt = new Date().toISOString();
@@ -216,6 +255,7 @@ export function createDemoRepository(actorId: string | null = null): Repository 
         statusNotificationStatus: null,
         statusNotificationError: null,
         statusNotifiedAt: null,
+        ghlNotificationError: null,
         status: "pending",
         denialReason: null,
         ghlAppointmentId: null,
@@ -295,6 +335,7 @@ export function createDemoRepository(actorId: string | null = null): Repository 
     async markApproved(id, adminId, ghlAppointmentId, now) {
       const booking = state.bookings.find((b) => b.id === id);
       if (!booking || booking.status !== "pending" || booking.reviewLockedBy !== adminId) return null;
+      if (new Date(booking.startTime).getTime() <= now.getTime()) throw new RepositoryError("invalid", PAST_DUE_MESSAGE);
       Object.assign(booking, {
         status: "approved",
         ghlAppointmentId,
@@ -466,6 +507,11 @@ export function createDemoRepository(actorId: string | null = null): Repository 
       if (request.reviewLockedAt && Date.now() - new Date(request.reviewLockedAt).getTime() < 2 * 60_000) return null;
       request.status = "cancelled";
       return copy(request);
+    },
+
+    async setBookingNotificationResult(bookingId, error) {
+      const booking = state.bookings.find((b) => b.id === bookingId);
+      if (booking) booking.ghlNotificationError = error;
     },
 
     async setRescheduleNotificationResult(id, error) {

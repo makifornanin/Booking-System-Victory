@@ -7,7 +7,7 @@ import type { AccessStatus } from "@/lib/data/types";
 import { formatPhone } from "@/lib/domain/phone";
 import { formatDate } from "@/lib/domain/time";
 import { adminUserTabSchema, firstParam } from "@/lib/validation/params";
-import { AccessActions } from "@/components/admin/access-actions";
+import { AccessActions, RoleAction } from "@/components/admin/access-actions";
 import { Avatar } from "@/components/shell/account-link";
 import { buttonStyles } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -39,7 +39,7 @@ function tabHref(status: AccessStatus, query: string) {
 }
 
 export default async function AdminUsersPage({ searchParams }: PageProps<"/admin/users">) {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const params = await searchParams;
   const query = (firstParam(params.q) ?? "").trim().slice(0, 100);
   const counts = await getUserCounts();
@@ -91,7 +91,7 @@ export default async function AdminUsersPage({ searchParams }: PageProps<"/admin
             <span>Mobile</span>
             <span>Joined</span>
             <span className="text-right">Bookings</span>
-            <span className="text-right">{status === "pending" ? "Decision" : "Status"}</span>
+            <span className="text-right">{status === "pending" ? "Decision" : status === "active" ? "Role" : "Status"}</span>
           </li>
           {list.map((user) => (
             <li
@@ -115,7 +115,17 @@ export default async function AdminUsersPage({ searchParams }: PageProps<"/admin
               <p className="hidden text-sm text-muted tabular-nums lg:block">{formatDate(user.createdAt, "d MMM yyyy")}</p>
               <p className="hidden text-right text-sm font-bold tabular-nums lg:block">{user.bookingCount}</p>
               <div className="relative z-10 col-start-2 row-span-2 row-start-1 flex justify-end lg:col-start-auto lg:row-span-1 lg:row-start-auto">
-                {status === "pending" ? <AccessActions userId={user.id} userName={user.fullName || user.email} status={user.accessStatus} compact /> : <AccessStatusMark status={user.accessStatus} />}
+                {status === "pending" ? (
+                  <AccessActions userId={user.id} userName={user.fullName || user.email} status={user.accessStatus} compact />
+                ) : status === "active" && user.accessStatus === "active" ? (
+                  user.id === admin.id ? (
+                    <span className="text-[13px] text-muted">You</span>
+                  ) : (
+                    <RoleAction userId={user.id} userName={user.fullName || user.email} role={user.role} compact />
+                  )
+                ) : (
+                  <AccessStatusMark status={user.accessStatus} />
+                )}
               </div>
             </li>
           ))}

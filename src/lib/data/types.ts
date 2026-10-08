@@ -4,6 +4,8 @@ export type Role = "user" | "admin";
 
 export type AccessStatus = "pending" | "active" | "denied" | "revoked";
 export type AccessChange = "approved" | "denied" | "revoked" | "restored";
+/** Admin-role changes, kept in the same history as access changes. */
+export type RoleChange = "promoted" | "demoted";
 
 export interface Profile {
   id: string;
@@ -26,8 +28,11 @@ export interface UserSummary extends Profile {
 
 export interface AccessEvent {
   id: string;
-  change: AccessChange;
+  change: AccessChange | RoleChange;
   reason: string | null;
+  /** Role changes only. */
+  previousRole: Role | null;
+  newRole: Role | null;
   actorName: string | null;
   notificationError: string | null;
   notifiedAt: string | null;
@@ -67,6 +72,8 @@ export interface Booking {
   ghlAppointmentId: string | null;
   googleCalendarEventId: string | null;
   googleCalendarSyncError: string | null;
+  /** Set when the GHL email for the admin's decision (the denial email) failed, so it can be retried. */
+  ghlNotificationError: string | null;
   /** Where the request came from. WhatsApp requests come through the n8n assistant. */
   source: BookingSource;
   /** WhatsApp message that created the request (idempotency key). */

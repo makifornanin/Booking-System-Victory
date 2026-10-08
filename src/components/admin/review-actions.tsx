@@ -19,8 +19,13 @@ export interface ReviewSummary {
   requester: string;
 }
 
-/** Approve / Deny for a pending request. Success is only shown after the server (and GHL) confirm. */
-export function ReviewActions({ bookingId, summary }: { bookingId: string; summary: ReviewSummary }) {
+const PAST_DUE_REASON = "This request wasn't reviewed before its start time, so it can no longer be approved. Please send a new request if you still need a room.";
+
+/**
+ * Approve / Deny for a pending request. Success is only shown after the server confirms.
+ * A past-due request can only be closed (denied with a note); the server refuses approval too.
+ */
+export function ReviewActions({ bookingId, summary, pastDue = false }: { bookingId: string; summary: ReviewSummary; pastDue?: boolean }) {
   const router = useRouter();
   const [dialog, setDialog] = useState<"approve" | "deny" | null>(null);
   const [approveError, setApproveError] = useState<string | null>(null);
@@ -59,7 +64,8 @@ export function ReviewActions({ bookingId, summary }: { bookingId: string; summa
       const result = await denyBookingAction(null, formData);
       setDenyState(result);
       if (result?.ok) {
-        toast.success(result.message);
+        if (result.data.notificationFailed) toast.warning(result.message, { duration: 10_000 });
+        else toast.success(result.message);
         setDialog(null);
         router.push("/admin/bookings?status=denied");
       } else if (result?.code === "unauthenticated") {
@@ -76,18 +82,20 @@ export function ReviewActions({ bookingId, summary }: { bookingId: string; summa
       <div className="flex flex-wrap gap-2">
         <Button variant="secondary" onClick={() => setDialog("deny")} disabled={busy}>
           <X className="size-4" aria-hidden />
-          Deny
+          {pastDue ? "Close request" : "Deny"}
         </Button>
-        <Button
-          onClick={() => {
-            setApproveError(null);
-            setDialog("approve");
-          }}
-          disabled={busy}
-        >
-          <Check className="size-4" aria-hidden />
-          Approve
-        </Button>
+        {!pastDue && (
+          <Button
+            onClick={() => {
+              setApproveError(null);
+              setDialog("approve");
+            }}
+            disabled={busy}
+          >
+            <Check className="size-4" aria-hidden />
+            Approve
+          </Button>
+        )}
       </div>
 
       <Dialog
@@ -119,7 +127,7 @@ export function ReviewActions({ bookingId, summary }: { bookingId: string; summa
         open={dialog === "deny"}
         onClose={() => setDialog(null)}
         locked={denying}
-        title="Deny this request?"
+        title={pastDue ? "Close this past-due request?" : "Deny this request?"}
         description={`${summary.event} · ${summary.room} · ${summary.date}`}
       >
         <form
@@ -140,6 +148,7 @@ export function ReviewActions({ bookingId, summary }: { bookingId: string; summa
               maxLength={500}
               required
               autoFocus
+              defaultValue={pastDue ? PAST_DUE_REASON : undefined}
               placeholder="e.g. Room D is closed for maintenance that evening. Room C is open instead."
               aria-invalid={Boolean(denyErrors.reason)}
               aria-describedby={describedBy("reason", denyErrors.reason, reasonHint)}
@@ -149,8 +158,8 @@ export function ReviewActions({ bookingId, summary }: { bookingId: string; summa
             <Button variant="secondary" onClick={() => setDialog(null)} disabled={denying}>
               Cancel
             </Button>
-            <Button type="submit" variant="danger" busy={denying} busyLabel="Denying…">
-              Deny request
+            <Button type="submit" variant="danger" busy={denying} busyLabel={pastDue ? "Closing…" : "Denying…"}>
+              {pastDue ? "Close request" : "Deny request"}
             </Button>
           </div>
         </form>

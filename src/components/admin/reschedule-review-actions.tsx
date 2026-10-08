@@ -20,7 +20,7 @@ export interface RescheduleSummary {
 }
 
 /** Approve / Deny a pending reschedule. Success only shows after GHL (and the database) confirm. */
-export function RescheduleReviewActions({ requestId, summary }: { requestId: string; summary: RescheduleSummary }) {
+export function RescheduleReviewActions({ requestId, summary, pastDue = false }: { requestId: string; summary: RescheduleSummary; pastDue?: boolean }) {
   const router = useRouter();
   const [dialog, setDialog] = useState<"approve" | "deny" | null>(null);
   const [approveError, setApproveError] = useState<string | null>(null);
@@ -57,7 +57,8 @@ export function RescheduleReviewActions({ requestId, summary }: { requestId: str
       const result = await denyRescheduleAction(null, formData);
       setDenyState(result);
       if (result?.ok) {
-        toast.success(result.message);
+        if (result.data.notificationFailed) toast.warning(result.message, { duration: 10_000 });
+        else toast.success(result.message);
         setDialog(null);
         router.push("/admin/bookings?status=denied");
       } else if (result?.code === "unauthenticated") {
@@ -74,18 +75,20 @@ export function RescheduleReviewActions({ requestId, summary }: { requestId: str
       <div className="flex flex-wrap gap-2">
         <Button variant="secondary" onClick={() => setDialog("deny")} disabled={busy}>
           <X className="size-4" aria-hidden />
-          Deny reschedule
+          {pastDue ? "Close request" : "Deny reschedule"}
         </Button>
-        <Button
-          onClick={() => {
-            setApproveError(null);
-            setDialog("approve");
-          }}
-          disabled={busy}
-        >
-          <Check className="size-4" aria-hidden />
-          Approve reschedule
-        </Button>
+        {!pastDue && (
+          <Button
+            onClick={() => {
+              setApproveError(null);
+              setDialog("approve");
+            }}
+            disabled={busy}
+          >
+            <Check className="size-4" aria-hidden />
+            Approve reschedule
+          </Button>
+        )}
       </div>
 
       <Dialog
@@ -132,6 +135,7 @@ export function RescheduleReviewActions({ requestId, summary }: { requestId: str
               maxLength={500}
               required
               autoFocus
+              defaultValue={pastDue ? "The requested time passed before this could be reviewed. Your original booking is unchanged." : undefined}
               placeholder="e.g. Room A is set up for another event that afternoon."
               aria-invalid={Boolean(denyErrors.reason)}
               aria-describedby={describedBy("reschedule-reason", denyErrors.reason, reasonHint)}

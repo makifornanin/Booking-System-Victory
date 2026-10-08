@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth/session";
 import { ConfigError } from "@/lib/env";
-import { changeAccess, retryAccessNotification, type AccessResult } from "@/lib/services/accounts";
+import { changeAccess, changeRole, retryAccessNotification, type AccessResult } from "@/lib/services/accounts";
+import { getRepository } from "@/lib/data";
 import { getAccountDeps } from "@/lib/services/deps";
 import { failure, type ServiceResult } from "@/lib/services/result";
 
@@ -41,4 +42,12 @@ export async function retryAccessNotificationAction(userId: string): Promise<Ser
   const result = await withConfig(async () => retryAccessNotification({ userId }, await getCurrentUser(), await getAccountDeps()));
   revalidateUserViews(userId);
   return result;
+}
+
+/** Make admin / remove admin access. Arguments are untrusted; the service and database check everything. */
+export async function changeRoleAction(userId: string, role: string): Promise<ServiceResult> {
+  const result = await changeRole({ userId, role }, await getCurrentUser(), { repo: await getRepository() });
+  if (!result.ok) return result;
+  revalidateUserViews(result.data.profile.id);
+  return { ok: true, data: undefined, message: result.message };
 }

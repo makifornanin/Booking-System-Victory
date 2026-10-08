@@ -81,6 +81,14 @@ New sign-ups are `pending`. They can sign in, but they only see the "awaiting ap
 
 Accounts are never deleted. Every decision is kept in the access history.
 
+**Admin roles:** on an active account, **Make admin** gives that person the admin area (users, booking and reschedule requests, announcements). On another admin, **Remove admin access** makes them a member again. Both ask for confirmation. The database enforces the rules, so they hold even if the browser is bypassed:
+
+- only active admins can change roles, and never their own;
+- only `active` accounts can be promoted;
+- at least one active admin always remains: the last one can't be demoted, revoked or denied ("At least one active administrator must remain.").
+
+Role changes go into the same access history (previous role, new role, who, when). Roles are read from the database on every request, so a promotion or demotion applies on the person's next page load; there's nothing to change in Neon Auth.
+
 The access decision is saved first. GHL is notified afterwards:
 
 1. The contact is found or created, then its name, email and phone are updated.
@@ -136,7 +144,11 @@ Uploads go under these prefixes: `announcements/`, `rooms/` (room photos) and `m
 
 If any GHL step fails, the booking stays pending and the admin sees the error in the dialog.
 
-**Denial:** the server writes the same fields plus Booking Denial Reason, then adds `GHL_DENIAL_TAG`, which starts the denial workflow. If the contact already has the tag, the server removes it first so the trigger fires again.
+**Denial** is a local decision. The server locks the request, marks it denied (reason, reviewer, time) and frees its slot. Only then does it notify GHL: it writes the same fields plus Booking Denial Reason and adds `GHL_DENIAL_TAG`, which starts the denial workflow. If the contact already has the tag, the server removes it first so the trigger fires again. If GHL fails, the booking stays denied, the error is stored on the booking, and the admin sees "Booking denied, but the notification could not be sent." with a **Retry notification** button. Reschedule denials work the same way.
+
+**Finding the GHL contact:** one helper looks the contact up by email, then by the E.164 phone, and creates it only if neither exists. A phone match is used only if that contact has no email or the same email; if the phone belongs to someone else's contact, a new contact is created with the email alone, so notifications never go to the wrong person. If GHL still answers "This location does not allow duplicated contacts", the lookup runs again and the existing contact is used. If an update is refused because the phone belongs to another contact, the rest of the update is still applied.
+
+**Past-due requests:** a pending request whose start time has passed (Asia/Manila) can't be approved. The app hides **Approve** and shows "This request can no longer be approved because its start time has passed.", and the database refuses the approval too. Nothing is denied automatically: the request stays pending, is labelled **Past due** below the active requests, and an admin closes it with **Close request** (a denial with a short prefilled note). Past times are never offered, so it doesn't affect later availability; until it's closed, it still holds any part of its time that hasn't ended yet.
 
 **Reschedules:** members can ask to move an upcoming approved booking to a new date and time in the same room (My bookings → **Request reschedule**). It's a request, not a change:
 

@@ -21,6 +21,17 @@ export function canMemberCancel(booking: { status: BookingStatus; startTime: str
   return (booking.status === "pending" || booking.status === "approved") && new Date(booking.startTime).getTime() > now.getTime();
 }
 
+export const PAST_DUE_MESSAGE = "This request can no longer be approved because its start time has passed.";
+
+/**
+ * A pending request whose start time has arrived. It stays pending (nobody is
+ * denied automatically) but can only be closed, never approved. Instants are
+ * absolute, so this holds the same in Asia/Manila as anywhere else.
+ */
+export function isPastDue(booking: { status: BookingStatus; startTime: string }, now: Date): boolean {
+  return booking.status === "pending" && new Date(booking.startTime).getTime() <= now.getTime();
+}
+
 /** Members may ask to move their own future approved bookings (a request, reviewed by an admin). */
 export function canRequestReschedule(booking: { status: BookingStatus; startTime: string }, now: Date): boolean {
   return booking.status === "approved" && new Date(booking.startTime).getTime() > now.getTime();

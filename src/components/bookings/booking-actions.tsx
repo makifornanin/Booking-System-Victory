@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { RefreshCw } from "lucide-react";
-import { cancelBookingAction, retryCalendarSyncAction, retryStatusNotificationAction } from "@/app/actions/bookings";
+import { cancelBookingAction, retryCalendarSyncAction, retryDenialEmailAction, retryStatusNotificationAction } from "@/app/actions/bookings";
 import { withdrawRescheduleAction } from "@/app/actions/reschedules";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -102,6 +102,29 @@ export function RetryStatusNotificationButton({ bookingId }: { bookingId: string
     >
       <RefreshCw className="size-3.5" aria-hidden />
       Retry WhatsApp notification
+    </Button>
+  );
+}
+
+/** Admin: resend the GHL denial email. The booking is already denied either way. */
+export function RetryDenialEmailButton({ bookingId }: { bookingId: string }) {
+  const [pending, startTransition] = useTransition();
+  return (
+    <Button
+      variant="secondary"
+      size="sm"
+      busy={pending}
+      busyLabel="Sending…"
+      onClick={() =>
+        startTransition(async () => {
+          const result = await retryDenialEmailAction(bookingId);
+          if (result.ok) toast.success(result.message);
+          else toast.error(result.error);
+        })
+      }
+    >
+      <RefreshCw className="size-3.5" aria-hidden />
+      Retry notification
     </Button>
   );
 }

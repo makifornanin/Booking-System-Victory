@@ -2,7 +2,8 @@ import "server-only";
 import { asMember } from "@/lib/db/client";
 import { PENDING_LIMIT_MESSAGE, RepositoryError, type Repository } from "@/lib/data/repository";
 import type { AccessStatus, AnnouncementInput, RescheduleRequestDetails, RescheduleStatus } from "@/lib/data/types";
-import type { BookingStatus } from "@/lib/domain/booking-rules";
+import { PAST_DUE_MESSAGE, type BookingStatus } from "@/lib/domain/booking-rules";
+import { INACTIVE_PROMOTION_MESSAGE, LAST_ADMIN_MESSAGE, OWN_ROLE_MESSAGE, SAME_ROLE_MESSAGE } from "@/lib/domain/roles";
 import {
   BOOKING_DETAILS_SELECT,
   BOOKING_WITH_ROOM_SELECT,
@@ -35,6 +36,11 @@ const DB_MESSAGES: Record<string, string> = {
   "Bookings use 30-minute steps": "Bookings use 30-minute steps.",
   "You have too many pending requests": PENDING_LIMIT_MESSAGE,
   "Admins cannot change their own access": "You can't change your own access.",
+  "Admins cannot change their own role": OWN_ROLE_MESSAGE,
+  "That user already has this role": SAME_ROLE_MESSAGE,
+  "Only active accounts can be made admins": INACTIVE_PROMOTION_MESSAGE,
+  [LAST_ADMIN_MESSAGE]: LAST_ADMIN_MESSAGE,
+  [PAST_DUE_MESSAGE]: PAST_DUE_MESSAGE,
   "Only approved bookings can be rescheduled": "Only approved bookings can be rescheduled.",
   "Past bookings cannot be rescheduled": "Past bookings can't be rescheduled.",
   "The booking changed after this request was made": "The booking changed after this request was made, so it can't be applied. Deny it and ask the member to request again.",
@@ -132,6 +138,11 @@ export function createPostgresRepository(actorId: string | null): Repository {
 
     async setUserAccess(userId, status, reason) {
       const row = await first<ProfileRow>("setUserAccess", "select * from public.admin_set_user_access($1, $2, $3)", [userId, status, reason]);
+      return row ? toProfile(row) : null;
+    },
+
+    async setUserRole(userId, role) {
+      const row = await first<ProfileRow>("setUserRole", "select * from public.admin_set_user_role($1, $2)", [userId, role]);
       return row ? toProfile(row) : null;
     },
 
@@ -427,6 +438,10 @@ export function createPostgresRepository(actorId: string | null): Repository {
     async cancelOwnReschedule(id) {
       const row = await first<RescheduleRow>("cancelOwnReschedule", "select * from public.cancel_my_reschedule($1)", [id]);
       return row ? toRescheduleRequest(row) : null;
+    },
+
+    async setBookingNotificationResult(bookingId, error) {
+      await query("setBookingNotificationResult", "update public.bookings set ghl_notification_error = $2 where id = $1", [bookingId, error]);
     },
 
     async setRescheduleNotificationResult(id, error) {

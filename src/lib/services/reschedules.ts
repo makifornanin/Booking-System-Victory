@@ -278,8 +278,16 @@ export async function approveReschedule(rawInput: unknown, actor: SessionUser | 
   return success({ calendarSync, notificationFailed: Boolean(notificationError) }, message);
 }
 
-/** Denies a reschedule. The original booking, its GHL appointment and Google event stay as they are. */
-export async function denyReschedule(rawInput: unknown, actor: SessionUser | null, deps: Pick<RescheduleDeps, "repo" | "calendar" | "now">): Promise<ServiceResult> {
+/**
+ * Denies a reschedule. The original booking, its GHL appointment and Google event
+ * stay as they are. The denial is saved first (releasing the held slot); the GHL
+ * email follows and, if it fails, is recorded for a retry without undoing anything.
+ */
+export async function denyReschedule(
+  rawInput: unknown,
+  actor: SessionUser | null,
+  deps: Pick<RescheduleDeps, "repo" | "calendar" | "now">,
+): Promise<ServiceResult<{ notificationFailed: boolean }>> {
   const denied = adminGuard(actor);
   if (denied) return denied;
   const parsed = denialSchema.safeParse(rawInput);
@@ -297,33 +305,37 @@ export async function denyReschedule(rawInput: unknown, actor: SessionUser | nul
     return explainUnclaimable(deps.repo, requestId);
   }
 
-  // The denial email reads these fields when the tag is added; if GHL fails, nothing changes.
-  const emailError = await sendRescheduleEmail(request, "denied", reason, deps, { throwOnError: true }).catch((error: unknown) => ghlUserMessage(error));
-  if (emailError) {
+  let deniedRequest: Awaited<ReturnType<Repository["markRescheduleDenied"]>>;
+  try {
+    deniedRequest = await deps.repo.markRescheduleDenied(requestId, adminId, reason, deps.now());
+  } catch (error) {
     await release();
-    return failure("calendar_error", `${emailError} The reschedule request is still pending.`);
+    return repositoryFailure(error);
   }
-
-  const deniedRequest = await deps.repo.markRescheduleDenied(requestId, adminId, reason, deps.now()).catch(() => null);
   if (!deniedRequest) {
     await release();
-    console.error(`[reschedules] GHL denial was triggered for request ${requestId} but it was not marked denied.`);
-    return failure("unknown", "GHL received the denial, but the request couldn't be updated. Refresh and check its status before trying again.");
+    return explainUnclaimable(deps.repo, requestId);
   }
-  return success(undefined, "Reschedule denied. The original booking stays confirmed, and GHL will email the member.");
+
+  const notificationError = await sendRescheduleEmail(request, "denied", reason, deps);
+  return success(
+    { notificationFailed: notificationError !== null },
+    notificationError
+      ? "Reschedule denied, but the notification could not be sent."
+      : "Reschedule denied. The original booking stays confirmed, and GHL will email the member.",
+  );
 }
 
 /**
  * Writes the requested room/event/date/time (and the denial reason) to the
  * member's GHL contact, then re-adds the reschedule email tag. Returns an error
- * message (recorded on the request) instead of throwing, unless asked to throw.
+ * message (recorded on the request) instead of throwing.
  */
 async function sendRescheduleEmail(
   request: RescheduleRequestDetails,
   outcome: "approved" | "denied",
   reason: string,
   deps: Pick<RescheduleDeps, "repo" | "calendar">,
-  options: { throwOnError?: boolean } = {},
 ): Promise<string | null> {
   const requester = request.booking.requester;
   try {
@@ -335,7 +347,6 @@ async function sendRescheduleEmail(
     await deps.repo.setRescheduleNotificationResult(request.id, null).catch(() => undefined);
     return null;
   } catch (error) {
-    if (options.throwOnError) throw error;
     const message = error instanceof Error && !("kind" in error) ? error.message : ghlUserMessage(error);
     console.error(`[reschedules] ${outcome} email failed for request ${request.id}:`, error instanceof Error ? error.message : error);
     await deps.repo.setRescheduleNotificationResult(request.id, message).catch(() => undefined);

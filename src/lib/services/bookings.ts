@@ -1,12 +1,12 @@
 import { REVIEW_LOCK_TTL_MS, eventTypeLabel } from "@/lib/config";
 import type { SessionUser } from "@/lib/auth/provider";
 import { RepositoryError, type Repository } from "@/lib/data/repository";
-import type { BookingDetails, BookingSource } from "@/lib/data/types";
+import type { Booking, BookingDetails, BookingSource } from "@/lib/data/types";
 import { isRangeBookable, toRange } from "@/lib/domain/availability";
-import { canMemberCancel, validateBookingWindow } from "@/lib/domain/booking-rules";
+import { canMemberCancel, isPastDue, PAST_DUE_MESSAGE, validateBookingWindow } from "@/lib/domain/booking-rules";
 import { dateKeyInZone, formatDate, formatTime, zonedDateTime } from "@/lib/domain/time";
 import { GhlError, ghlUserMessage } from "@/lib/ghl/errors";
-import { REVIEW_ALERT_TAGS, resolveCalendarId, type BookingFieldValues, type CalendarGateway, type GhlContactRef } from "@/lib/ghl/gateway";
+import { REVIEW_ALERT_TAGS, resolveCalendarId, type BookingFieldValues, type CalendarGateway } from "@/lib/ghl/gateway";
 import type { GoogleCalendarGateway } from "@/lib/google/gateway";
 import { getRoomDayAvailability, isWindowFreeInCalendar } from "@/lib/services/availability";
 import { SYNC_MESSAGES, syncApprovedBooking, type CalendarSyncOutcome } from "@/lib/services/calendar-sync";
@@ -282,6 +282,10 @@ export async function approveBooking(
       return explainUnclaimable(deps.repo, bookingId);
     }
     details = current;
+    if (isPastDue(details, deps.now())) {
+      await release();
+      return failure("invalid", PAST_DUE_MESSAGE);
+    }
 
     const window = toRange(details.startTime, details.endTime);
     const [room, conflicts] = await Promise.all([
@@ -291,10 +295,6 @@ export async function approveBooking(
     if (!room || !room.isActive) {
       await release();
       return failure("invalid", "This room is no longer active. Deny the request or reactivate the room.");
-    }
-    if (window.start <= deps.now().getTime()) {
-      await release();
-      return failure("invalid", "This booking's start time has passed. Deny it instead.");
     }
     if (conflicts.length > 0) {
       await release();
@@ -400,11 +400,25 @@ export async function approveBooking(
   return success({ calendarSync }, message);
 }
 
+export const DENIAL_NOTIFICATION_FAILED = "Booking denied, but the notification could not be sent.";
+
+export interface DenialResult {
+  /** The booking is denied either way; only GHL's email to the requester failed (it can be retried). */
+  notificationFailed: boolean;
+}
+
+/**
+ * Denying is a local decision. Order:
+ * 1. claim and re-check the pending booking;
+ * 2. mark it denied with the reason, reviewer and time, which frees its slot;
+ * 3. only then ask GHL to email the requester. A GHL failure is recorded on the
+ *    booking for a retry and never undoes the denial.
+ */
 export async function denyBooking(
   rawInput: unknown,
   actor: SessionUser | null,
   deps: Omit<BookingServiceDeps, "google">,
-): Promise<ServiceResult> {
+): Promise<ServiceResult<DenialResult>> {
   const deniedActor = adminGuard(actor, "deny");
   if (deniedActor) return deniedActor;
 
@@ -425,46 +439,75 @@ export async function denyBooking(
   const { release } = lock;
 
   let details: BookingDetails | null;
-  let deniedContact: GhlContactRef | null = null;
   try {
     details = await deps.repo.getBookingDetails(bookingId);
-    if (!details || details.status !== "pending") {
-      await release();
-      return explainUnclaimable(deps.repo, bookingId);
-    }
-    if (!details.requester.email) {
-      await release();
-      return failure("invalid", "The requester has no email address on file, so GHL can't send the denial email.");
-    }
-
-    // The denial workflow reads these fields when the tag is added.
-    const contact = await syncGhlContact(deps.calendar, deps.repo, details.requester, { fields: bookingFieldValues(details, reason) });
-    await deps.calendar.addTriggerTag(contact, deps.calendar.bookingDeniedTag);
-    deniedContact = contact;
   } catch (error) {
     await release();
-    return ghlFailure(error);
+    return repositoryFailure(error);
+  }
+  if (!details || details.status !== "pending") {
+    await release();
+    return explainUnclaimable(deps.repo, bookingId);
   }
 
-  let deniedBooking: Awaited<ReturnType<Repository["markDenied"]>>;
+  let deniedBooking: Booking | null;
   try {
     deniedBooking = await deps.repo.markDenied(bookingId, adminId, reason, deps.now());
   } catch (error) {
     console.error(`[bookings] markDenied failed for ${bookingId}`, error instanceof Error ? error.message : error);
+    // The update may have committed even though the response was lost.
     const current = await deps.repo.getBookingDetails(bookingId).catch(() => null);
     deniedBooking = current?.status === "denied" ? current : null;
+    if (!deniedBooking) {
+      await release();
+      return repositoryFailure(error);
+    }
   }
-
   if (!deniedBooking) {
     await release();
-    console.error(`[bookings] GHL denial was triggered for booking ${bookingId} but the booking was not marked denied.`);
-    return failure(
-      "unknown",
-      "GHL received the denial, but the booking couldn't be updated. Refresh and check its status before trying again, so the requester isn't emailed twice.",
-    );
+    return explainUnclaimable(deps.repo, bookingId);
   }
 
-  notifyStatusChange(deps.notifier, { ...details, ...deniedBooking, status: "denied", denialReason: reason }, "denied");
-  await clearReviewAlert(deps.calendar, deniedContact, REVIEW_ALERT_TAGS.booking);
-  return success(undefined, "Booking denied. GHL will email the requester with your reason.");
+  const denied: BookingDetails = { ...details, ...deniedBooking, status: "denied", denialReason: reason };
+  notifyStatusChange(deps.notifier, denied, "denied");
+  const notificationError = await sendDenialEmail(denied, deps);
+  return success(
+    { notificationFailed: notificationError !== null },
+    notificationError ? DENIAL_NOTIFICATION_FAILED : "Booking denied. GHL will email the requester with your reason.",
+  );
+}
+
+/**
+ * Best-effort: writes the denial to the requester's GHL contact, clears the
+ * pending-review alert and re-adds the denial tag (its workflow sends the email).
+ * The outcome is saved on the booking; returns the error message, never throws.
+ */
+async function sendDenialEmail(booking: BookingDetails, deps: Pick<BookingServiceDeps, "repo" | "calendar">): Promise<string | null> {
+  let message: string | null = null;
+  try {
+    if (!booking.requester.email) throw new Error("The requester has no email address on file.");
+    const contact = await syncGhlContact(deps.calendar, deps.repo, booking.requester, { fields: bookingFieldValues(booking, booking.denialReason ?? "") });
+    await clearReviewAlert(deps.calendar, contact, REVIEW_ALERT_TAGS.booking);
+    await deps.calendar.addTriggerTag(contact, deps.calendar.bookingDeniedTag);
+  } catch (error) {
+    message = error instanceof Error && !("kind" in error) ? error.message : ghlUserMessage(error);
+    console.error(`[bookings] denial email failed for booking ${booking.id}:`, error instanceof Error ? error.message : error);
+  }
+  await deps.repo.setBookingNotificationResult(booking.id, message).catch((error: unknown) => {
+    console.error(`[bookings] could not record the denial email result for ${booking.id}`, error instanceof Error ? error.message : error);
+  });
+  return message;
+}
+
+/** Admin: re-sends the denial email for a denied booking. */
+export async function retryDenialEmail(rawInput: unknown, actor: SessionUser | null, deps: Pick<BookingServiceDeps, "repo" | "calendar">): Promise<ServiceResult> {
+  const deniedActor = adminGuard(actor, "review");
+  if (deniedActor) return deniedActor;
+  const parsed = bookingIdSchema.safeParse(rawInput);
+  if (!parsed.success) return failure("invalid", "Unknown booking.");
+  const booking = await deps.repo.getBookingDetails(parsed.data.bookingId);
+  if (!booking) return failure("not_found", "We couldn't find that booking.");
+  if (booking.status !== "denied") return failure("invalid", "Only denied bookings send a denial email.");
+  const error = await sendDenialEmail(booking, deps);
+  return error ? failure("calendar_error", `The notification failed again: ${error}`) : success(undefined, "Notification sent.");
 }

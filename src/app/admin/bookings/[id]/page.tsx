@@ -6,12 +6,13 @@ import { ArrowLeft, CalendarCheck2 } from "lucide-react";
 import { eventTypeLabel } from "@/lib/config";
 import { requireAdmin } from "@/lib/auth/session";
 import { getRepositoryForRequest } from "@/lib/data/queries";
+import { isPastDue, PAST_DUE_MESSAGE } from "@/lib/domain/booking-rules";
 import { formatPhone } from "@/lib/domain/phone";
 import { dateKeyInZone, formatDate, formatTimeRange, zonedDayRange } from "@/lib/domain/time";
 import { parseUuid } from "@/lib/validation/params";
 import { ReviewActions } from "@/components/admin/review-actions";
 import { SummaryList } from "@/components/admin/summary-list";
-import { CancelBookingButton, RetryCalendarSyncButton, RetryStatusNotificationButton } from "@/components/bookings/booking-actions";
+import { CancelBookingButton, RetryCalendarSyncButton, RetryDenialEmailButton, RetryStatusNotificationButton } from "@/components/bookings/booking-actions";
 import { Notice } from "@/components/ui/notice";
 import { BookingStatus } from "@/components/ui/status";
 
@@ -35,8 +36,10 @@ export default async function AdminBookingPage({ params }: PageProps<"/admin/boo
   const pendingReschedule = reschedules.find((r) => r.status === "pending");
   const slot = (from: string, to: string) => `${formatDate(from, "EEE d MMM")} · ${formatTimeRange(from, to)}`;
   const roomDay = sameDay.filter((b) => b.roomId === booking.roomId);
+  const now = new Date();
   const isPending = booking.status === "pending";
-  const isUpcoming = new Date(booking.startTime) > new Date();
+  const pastDue = isPastDue(booking, now);
+  const isUpcoming = new Date(booking.startTime) > now;
   const overCapacity = room && booking.attendeeCount > room.capacity;
   const dateLabel = formatDate(booking.startTime, "EEEE, d MMMM yyyy");
   const timeLabel = formatTimeRange(booking.startTime, booking.endTime);
@@ -68,7 +71,7 @@ export default async function AdminBookingPage({ params }: PageProps<"/admin/boo
 
       <header className="flex flex-col gap-5 border-b border-line pb-6 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          <BookingStatus status={booking.status} />
+          <BookingStatus status={booking.status} pastDue={pastDue} />
           <h1 className="title mt-2 text-3xl">{booking.eventName}</h1>
           <p className="mt-1.5 text-[15px] text-muted">
             {booking.room.name} · {dateLabel} · {timeLabel} · {booking.requester.fullName}
@@ -77,6 +80,7 @@ export default async function AdminBookingPage({ params }: PageProps<"/admin/boo
         {isPending ? (
           <ReviewActions
             bookingId={booking.id}
+            pastDue={pastDue}
             summary={{ event: booking.eventName, room: booking.room.name, date: dateLabel, time: timeLabel, requester: `${booking.requester.fullName} (${booking.requester.email})` }}
           />
         ) : booking.status === "approved" && isUpcoming ? (
@@ -84,12 +88,22 @@ export default async function AdminBookingPage({ params }: PageProps<"/admin/boo
         ) : null}
       </header>
 
+      {pastDue && (
+        <Notice tone="warning" title="Past due">
+          {PAST_DUE_MESSAGE} Closing it records it as denied and emails the requester your note.
+        </Notice>
+      )}
       {booking.status === "denied" && booking.denialReason && (
         <Notice tone="error" title="Denial reason">
           {booking.denialReason}
         </Notice>
       )}
-      {isPending && overCapacity && <Notice tone="warning">This request is for more people than the room holds ({room.capacity}).</Notice>}
+      {booking.status === "denied" && booking.ghlNotificationError && (
+        <Notice tone="warning" title="Booking denied, but the notification could not be sent." action={<RetryDenialEmailButton bookingId={booking.id} />}>
+          {booking.ghlNotificationError}
+        </Notice>
+      )}
+      {isPending && !pastDue && overCapacity && <Notice tone="warning">This request is for more people than the room holds ({room.capacity}).</Notice>}
       {pendingReschedule && (
         <Notice
           tone="info"

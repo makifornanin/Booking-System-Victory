@@ -7,14 +7,14 @@ import { buildStatusPayload, deliverStatusWebhook } from "@/lib/bot/status-webho
 import { getRepository } from "@/lib/data";
 import { getStatusWebhookConfig } from "@/lib/env";
 import { ConfigError } from "@/lib/env";
-import { approveBooking, cancelBooking, createBookingRequest, denyBooking, type ApprovalResult } from "@/lib/services/bookings";
+import { approveBooking, cancelBooking, createBookingRequest, denyBooking, retryDenialEmail, type ApprovalResult, type DenialResult } from "@/lib/services/bookings";
 import { retryCalendarSync } from "@/lib/services/calendar-sync";
 import { retryStatusNotification } from "@/lib/services/status-notifications";
 import { getBookingDeps, getCalendarSyncDeps } from "@/lib/services/deps";
 import { failure, type ServiceResult } from "@/lib/services/result";
 
 export type BookingActionState = ServiceResult<{ bookingId: string }> | null;
-export type ReviewActionState = ServiceResult | null;
+export type ReviewActionState = ServiceResult<DenialResult> | null;
 
 const BOOKING_FIELDS = ["roomId", "date", "startTime", "endTime", "eventName", "eventType", "attendeeCount", "purpose"] as const;
 
@@ -75,6 +75,13 @@ export async function denyBookingAction(_prev: ReviewActionState, formData: Form
     revalidateAdminViews(String(input.bookingId));
     revalidateMemberViews();
   }
+  return result;
+}
+
+/** Admin: resend the GHL denial email after it failed. The booking is already denied. */
+export async function retryDenialEmailAction(bookingId: string): Promise<ServiceResult> {
+  const result = await withConfig(async () => retryDenialEmail({ bookingId }, await getCurrentUser(), await getBookingDeps()));
+  revalidateAdminViews(bookingId);
   return result;
 }
 

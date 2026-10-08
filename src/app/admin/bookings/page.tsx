@@ -1,6 +1,7 @@
+import { Fragment } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { CalendarX2, MessageCircle } from "lucide-react";
+import { CalendarX2, MailWarning, MessageCircle } from "lucide-react";
 import { z } from "zod";
 import { eventTypeLabel } from "@/lib/config";
 import { requireAdmin } from "@/lib/auth/session";
@@ -41,10 +42,14 @@ const startOf = (item: Item) => (item.kind === "booking" ? item.booking.startTim
 const endOf = (item: Item) => (item.kind === "booking" ? item.booking.endTime : item.request.requestedEnd);
 const reviewedOf = (item: Item) => (item.kind === "booking" ? item.booking.reviewedAt : item.request.reviewedAt) ?? "";
 
+/** A pending request whose (requested) start has passed: it can only be closed. */
+const isStale = (item: Item, now: Date) => new Date(startOf(item)) <= now;
+
 function order(items: Item[], status: "pending" | "approved" | "denied", now: Date): Item[] {
   if (status === "denied") return [...items].sort((a, b) => reviewedOf(b).localeCompare(reviewedOf(a)));
   const ascending = [...items].sort((a, b) => startOf(a).localeCompare(startOf(b)));
-  if (status === "pending") return ascending;
+  // Requests that can still be approved come first; past-due ones wait below to be closed.
+  if (status === "pending") return [...ascending.filter((item) => !isStale(item, now)), ...ascending.filter((item) => isStale(item, now))];
   const upcoming = ascending.filter((item) => new Date(endOf(item)) > now);
   const past = ascending.filter((item) => new Date(endOf(item)) <= now).reverse();
   return [...upcoming, ...past];
@@ -65,6 +70,7 @@ export default async function AdminBookingsPage({ searchParams }: PageProps<"/ad
   ];
   const sourceOf = (item: Item) => (item.kind === "booking" ? item.booking.source : item.request.booking.source);
   const items = order(source === "all" ? all : all.filter((item) => sourceOf(item) === source), status, now);
+  const firstPastDue = status === "pending" ? items.findIndex((item) => isStale(item, now)) : -1;
   const hrefFor = (s: string, src: string) => {
     const query = new URLSearchParams();
     if (s !== "pending") query.set("status", s);
@@ -116,13 +122,21 @@ export default async function AdminBookingsPage({ searchParams }: PageProps<"/ad
             <span>Requested by</span>
             <span className="text-right">{status === "denied" ? "Reviewed" : "Submitted"}</span>
           </li>
-          {items.map((item) =>
-            item.kind === "booking" ? (
-              <BookingItem key={item.booking.id} booking={item.booking} status={status} now={now} />
-            ) : (
-              <RescheduleItem key={item.request.id} request={item.request} status={status} now={now} />
-            ),
-          )}
+          {items.map((item, index) => (
+            <Fragment key={item.kind === "booking" ? item.booking.id : item.request.id}>
+              {index === firstPastDue && (
+                <li className="pt-8 pb-2.5">
+                  <h2 className="text-[13px] font-extrabold">Past due</h2>
+                  <p className="text-[13px] text-muted">The start time passed before these were reviewed, so they can only be closed.</p>
+                </li>
+              )}
+              {item.kind === "booking" ? (
+                <BookingItem booking={item.booking} status={status} now={now} />
+              ) : (
+                <RescheduleItem request={item.request} status={status} now={now} />
+              )}
+            </Fragment>
+          ))}
         </ul>
       )}
     </div>
@@ -166,6 +180,12 @@ function BookingItem({ booking, status, now }: { booking: BookingDetails; status
           <p className="mt-0.5 flex items-center gap-1 text-xs font-bold text-pending">
             <CalendarX2 className="size-3.5" aria-hidden />
             Google Calendar sync failed
+          </p>
+        )}
+        {status === "denied" && booking.ghlNotificationError && (
+          <p className="mt-0.5 flex items-center gap-1 text-xs font-bold text-pending">
+            <MailWarning className="size-3.5" aria-hidden />
+            Denial email not sent
           </p>
         )}
       </div>

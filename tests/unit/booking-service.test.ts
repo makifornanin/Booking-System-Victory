@@ -3,7 +3,17 @@ import type { Repository } from "@/lib/data/repository";
 import { createDemoRepository } from "@/lib/demo/repository";
 import { addDaysToKey, dateKeyInZone, formatDate, zonedDateTime, zonedDayRange } from "@/lib/domain/time";
 import { GhlError } from "@/lib/ghl/errors";
-import { approveBooking, cancelBooking, createBookingRequest, denyBooking, type BookingServiceDeps } from "@/lib/services/bookings";
+import { isPastDue, PAST_DUE_MESSAGE } from "@/lib/domain/booking-rules";
+import { getRoomDayAvailability } from "@/lib/services/availability";
+import {
+  approveBooking,
+  cancelBooking,
+  createBookingRequest,
+  DENIAL_NOTIFICATION_FAILED,
+  denyBooking,
+  retryDenialEmail,
+  type BookingServiceDeps,
+} from "@/lib/services/bookings";
 import { retryCalendarSync } from "@/lib/services/calendar-sync";
 import { admin, fakeGhl, fakeGoogle, member, otherMember, ROOM_A } from "./fakes";
 
@@ -338,7 +348,10 @@ describe("denial", () => {
   it("updates the contact fields with the reason, adds the denial tag, then marks denied", async () => {
     const id = await createPending("10:00", "12:00");
     const ghl = fakeGhl({ day: DAY });
-    expect((await denyBooking({ bookingId: id, reason: "Room is being repainted." }, admin, adminDeps({ calendar: ghl.gateway }))).ok).toBe(true);
+    expect(await denyBooking({ bookingId: id, reason: "Room is being repainted." }, admin, adminDeps({ calendar: ghl.gateway }))).toMatchObject({
+      ok: true,
+      data: { notificationFailed: false },
+    });
     expect(ghl.log.updates[0].fields).toMatchObject({ room: "Room A", denialReason: "Room is being repainted." });
     expect(ghl.log.tags).toEqual([{ contactId: "contact-1", tag: "room-booking-denied" }]);
     expect(await adminRepo.getBookingDetails(id)).toMatchObject({ status: "denied", denialReason: "Room is being repainted.", reviewedBy: admin.id });
@@ -346,14 +359,89 @@ describe("denial", () => {
     expect(await repo.getBusyRanges(ROOM_A, start, end)).toEqual([]);
   });
 
-  it("never reports success when the GHL tag or fields fail", async () => {
-    const id = await createPending();
-    for (const options of [{ failTag: true }, { failContactUpdate: true }]) {
-      expect(await denyBooking({ bookingId: id, reason: "Closed that day." }, admin, adminDeps({ calendar: fakeGhl({ day: DAY, ...options }).gateway }))).toMatchObject({
-        ok: false,
-        code: "calendar_error",
+  it("denies locally even when GHL fails: reason kept, slot released, failure recorded", async () => {
+    const { start, end } = zonedDayRange(DAY);
+    // Tag refused, contact fields refused, and GHL completely unavailable.
+    for (const options of [{ failTag: true }, { failContactUpdate: true }, { contactsDown: true }]) {
+      const id = await createPending();
+      const result = await denyBooking({ bookingId: id, reason: "Closed that day." }, admin, adminDeps({ calendar: fakeGhl({ day: DAY, ...options }).gateway }));
+      expect(result).toMatchObject({ ok: true, data: { notificationFailed: true }, message: DENIAL_NOTIFICATION_FAILED });
+      expect(await adminRepo.getBookingDetails(id)).toMatchObject({
+        status: "denied",
+        denialReason: "Closed that day.",
+        reviewedBy: admin.id,
+        reviewLockedAt: null,
+        ghlNotificationError: expect.any(String),
       });
-      expect(await adminRepo.getBookingDetails(id)).toMatchObject({ status: "pending", denialReason: null, reviewLockedAt: null });
+      expect(await repo.getBusyRanges(ROOM_A, start, end)).toEqual([]);
     }
+  });
+
+  it("lets an admin retry a failed denial email", async () => {
+    const id = await createPending();
+    await denyBooking({ bookingId: id, reason: "Closed that day." }, admin, adminDeps({ calendar: fakeGhl({ day: DAY, contactsDown: true }).gateway }));
+
+    const ghl = fakeGhl({ day: DAY });
+    expect(await retryDenialEmail({ bookingId: id }, member, deps({ calendar: ghl.gateway }))).toMatchObject({ ok: false, code: "forbidden" });
+    expect(await retryDenialEmail({ bookingId: id }, admin, adminDeps({ calendar: ghl.gateway }))).toMatchObject({ ok: true });
+    expect(ghl.log.updates[0].fields).toMatchObject({ denialReason: "Closed that day." });
+    expect(ghl.log.tags).toEqual([{ contactId: "contact-1", tag: "room-booking-denied" }]);
+    expect((await adminRepo.getBookingDetails(id))?.ghlNotificationError).toBeNull();
+  });
+
+  it("only re-sends the email for denied bookings", async () => {
+    const id = await createPending();
+    expect(await retryDenialEmail({ bookingId: id }, admin, adminDeps())).toMatchObject({ ok: false, code: "invalid" });
+  });
+});
+
+describe("past-due requests", () => {
+  const start = () => zonedDateTime(DAY, "10:00");
+
+  it("are past due from the exact start time (Asia/Manila)", () => {
+    const booking = { status: "pending" as const, startTime: start().toISOString() };
+    expect(isPastDue(booking, new Date(start().getTime() - 1))).toBe(false);
+    expect(isPastDue(booking, start())).toBe(true);
+    expect(isPastDue({ ...booking, status: "approved" }, new Date(start().getTime() + 3_600_000))).toBe(false);
+  });
+
+  it("can be approved until the start time, never at it", async () => {
+    const id = await createPending("10:00", "12:00");
+    const ghl = fakeGhl({ day: DAY });
+    expect(await approveBooking({ bookingId: id }, admin, adminDeps({ calendar: ghl.gateway, now: start }))).toMatchObject({
+      ok: false,
+      code: "invalid",
+      error: PAST_DUE_MESSAGE,
+    });
+    expect(ghl.log.appointments).toHaveLength(0);
+    expect(await adminRepo.getBookingDetails(id)).toMatchObject({ status: "pending", reviewLockedAt: null });
+
+    const justBefore = () => new Date(start().getTime() - 1);
+    expect(await approveBooking({ bookingId: id }, admin, adminDeps({ calendar: ghl.gateway, now: justBefore }))).toMatchObject({ ok: true });
+  });
+
+  it("stay pending (never auto-denied) until an admin closes them", async () => {
+    const id = await createPending("10:00", "12:00");
+    const later = () => zonedDateTime(DAY, "13:00");
+    expect((await approveBooking({ bookingId: id }, admin, adminDeps({ now: later }))).ok).toBe(false);
+    expect((await adminRepo.getBookingDetails(id))?.status).toBe("pending");
+    expect(await denyBooking({ bookingId: id, reason: "The start time passed before review." }, admin, adminDeps({ now: later }))).toMatchObject({ ok: true });
+    expect((await adminRepo.getBookingDetails(id))?.status).toBe("denied");
+  });
+
+  it("are refused by the repository too, if the service check is ever bypassed", async () => {
+    const id = await createPending("10:00", "12:00");
+    const later = zonedDateTime(DAY, "13:00");
+    await adminRepo.claimBookingForReview(id, admin.id, later, new Date(later.getTime() - 120_000));
+    await expect(adminRepo.markApproved(id, admin.id, "appt-x", later)).rejects.toMatchObject({ code: "invalid", message: PAST_DUE_MESSAGE });
+  });
+
+  it("don't block later times", async () => {
+    await createPending("10:00", "12:00");
+    const room = (await repo.getRoomById(ROOM_A))!;
+    const calendar = fakeGhl({ day: DAY }).gateway;
+    const { slots } = await getRoomDayAvailability(room, DAY, { repo, calendar, now: () => zonedDateTime(DAY, "13:00") });
+    expect(slots.filter((s) => new Date(s.start) < zonedDateTime(DAY, "13:00")).every((s) => s.status === "past")).toBe(true);
+    expect(slots.filter((s) => new Date(s.start) >= zonedDateTime(DAY, "13:00")).every((s) => s.status !== "reserved")).toBe(true);
   });
 });

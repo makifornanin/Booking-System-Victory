@@ -13,6 +13,7 @@ import type {
   RescheduleRequest,
   RescheduleRequestDetails,
   RescheduleStatus,
+  Role,
   Room,
   UserSummary,
 } from "@/lib/data/types";
@@ -46,6 +47,12 @@ export interface Repository {
   /** Throws RepositoryError("invalid") for transitions the database rejects. */
   setUserAccess(userId: string, status: AccessStatus, reason: string | null): Promise<Profile | null>;
   setAccessNotificationResult(userId: string, error: string | null): Promise<void>;
+  /**
+   * Admin-only: makes an active user an admin or another admin a member, recorded
+   * in the access history. Throws RepositoryError("invalid") for changes the
+   * database refuses (own role, inactive account, the last active admin).
+   */
+  setUserRole(userId: string, role: Role): Promise<Profile | null>;
   saveGhlContactId(userId: string, contactId: string): Promise<void>;
 
   listActiveRooms(): Promise<Room[]>;
@@ -82,6 +89,8 @@ export interface Repository {
   /** Admin cancels an approved booking (after GHL was cancelled). */
   cancelApprovedBooking(id: string): Promise<Booking | null>;
   setCalendarSync(bookingId: string, eventId: string | null, error: string | null): Promise<void>;
+  /** Admin-only: records whether the GHL email for the decision was sent (null = sent). */
+  setBookingNotificationResult(bookingId: string, error: string | null): Promise<void>;
 
   /** Member: holds the requested slot. Throws conflict/duplicate/invalid/forbidden RepositoryErrors. */
   insertRescheduleRequest(input: { bookingId: string; requestedStart: string; requestedEnd: string }): Promise<RescheduleRequest>;

@@ -63,7 +63,9 @@ export default async function AdminOverviewPage() {
       reschedule: true,
     })),
   ]
-    .sort((a, b) => a.start.localeCompare(b.start))
+    .map((item) => ({ ...item, pastDue: new Date(item.start) <= now }))
+    // Requests that can still be approved first; past-due ones can only be closed.
+    .sort((a, b) => Number(a.pastDue) - Number(b.pastDue) || a.start.localeCompare(b.start))
     .slice(0, 6);
 
   return (
@@ -81,6 +83,7 @@ export default async function AdminOverviewPage() {
                       {item.eventName}
                     </Link>
                     <p className="truncate text-[13px] text-muted">
+                      {item.pastDue && <span className="font-semibold text-ink-soft">Past due · </span>}
                       {item.reschedule && <span className="font-semibold text-accent-ink">Reschedule · </span>}
                       {item.requester} · {item.room}
                     </p>

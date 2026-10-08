@@ -38,7 +38,9 @@ const bookingLabels: Record<BookingStatus, string> = {
   cancelled: "Cancelled",
 };
 
-export function BookingStatus({ status, className }: { status: BookingStatus; className?: string }) {
+/** `pastDue`: a pending request whose start time has passed (it can only be closed). */
+export function BookingStatus({ status, pastDue, className }: { status: BookingStatus; pastDue?: boolean; className?: string }) {
+  if (status === "pending" && pastDue) return <StatusMark tone="cancelled" label="Past due" className={className} />;
   return <StatusMark tone={status} label={bookingLabels[status]} className={className} />;
 }
 
